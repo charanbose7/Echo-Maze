@@ -63,11 +63,11 @@ public class GameBootstrap : MonoBehaviour
         // ---- Player ----
         var playerGO = new GameObject("Player");
         var rb = playerGO.AddComponent<Rigidbody2D>();
-        rb.bodyType = RigidbodyType2D.Dynamic;
-        rb.gravityScale = 0f;
+        // Kinematic: we move the dot directly at frame-rate and resolve walls with casts,
+        // so there's zero physics-step input lag. No interpolation for the same reason.
+        rb.bodyType = RigidbodyType2D.Kinematic;
         rb.freezeRotation = true;
-        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        rb.interpolation = RigidbodyInterpolation2D.None;
         var pcol = playerGO.AddComponent<CircleCollider2D>();
         pcol.radius = GameConfig.PlayerRadius;
 
@@ -98,7 +98,7 @@ public class GameBootstrap : MonoBehaviour
         trail.colorGradient = grad;
 
         var player = playerGO.AddComponent<PlayerController>();
-        player.Init(gm, sonar, cam, glow.transform, fx, trail);
+        player.Init(gm, sonar, cam, glow.transform, fx, trail, audio);
         sonar.SetPlayer(playerGO.transform);
 
         // ---- Exit glow ----

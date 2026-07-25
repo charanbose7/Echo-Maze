@@ -37,6 +37,8 @@ public class GameManager : MonoBehaviour
     private Difficulty _profile;
     private float _levelTimer;
     private bool _hintPending;
+    private bool _hintMoved, _hintPinged;
+    private float _hintTimer;
 
     // Moving exit.
     private bool _movingExit;
@@ -130,7 +132,31 @@ public class GameManager : MonoBehaviour
         FitCamera(_maze);
 
         _hintPending = level == 1 && !SaveData.HintSeen;
-        if (_hintPending) _ui.ShowHint(); else _ui.HideHint();
+        _hintMoved = _hintPinged = false;
+        _hintTimer = 0f;
+        if (_hintPending) { _ui.ShowHint(); RefreshHint(); } else _ui.HideHint();
+    }
+
+    private void UpdateHint()
+    {
+        if (!_hintPending) return;
+        _hintTimer += Time.deltaTime;
+        if (!_hintMoved && _player.Moving) { _hintMoved = true; RefreshHint(); }
+        // Dismiss once they've done both, or after a timeout so it never nags forever.
+        if ((_hintMoved && _hintPinged) || _hintTimer > GameConfig.HintMaxSeconds)
+        {
+            _hintPending = false;
+            _ui.HideHint();
+            SaveData.MarkHintSeen();
+        }
+    }
+
+    private void RefreshHint()
+    {
+        if (!_hintPending) return;
+        if (_hintPinged && !_hintMoved) _ui.SetHintText("nice!   now DRAG to reach the exit");
+        else if (_hintMoved && !_hintPinged) _ui.SetHintText("TAP anywhere to ping & reveal walls");
+        else _ui.SetHintText("DRAG to move   •   TAP to ping");
     }
 
     private void PlaceDecoys(int count)
@@ -170,7 +196,7 @@ public class GameManager : MonoBehaviour
     public void RequestPing()
     {
         if (State != GameState.Playing) return;
-        if (_hintPending) { _hintPending = false; _ui.HideHint(); SaveData.MarkHintSeen(); }
+        if (_hintPending && !_hintPinged) { _hintPinged = true; RefreshHint(); }
         if (_pings <= 0) return; // no ping left, but you can still move blind
 
         _pings--;
@@ -202,6 +228,8 @@ public class GameManager : MonoBehaviour
 
     private void TickPlaying()
     {
+        if (_player.IsRewinding) return; // world is frozen mid-rewind
+
         if (_profile.timeLimit > 0f)
         {
             _levelTimer -= Time.deltaTime;
@@ -210,6 +238,7 @@ public class GameManager : MonoBehaviour
         }
         else _ui.SetTimer(-1);
 
+        UpdateHint();
         UpdateMovingExit();
         UpdateDecoys();
         PulseExit();
@@ -271,26 +300,23 @@ public class GameManager : MonoBehaviour
                 (pp - _decoyPos[i]).sqrMagnitude < hitRadiusSqr)
             {
                 HitDecoy(i);
+                return; // one hit is enough — the rewind takes over
             }
         }
     }
 
     private void HitDecoy(int i)
     {
-        _audio.PlayWrong();
-        Haptics.Heavy();
-        _ui.FlashColor(new Color(1f, 0.3f, 0.18f, 1f), 0.4f);
+        // Penalty: freeze time, wipe the reveal, and rewind the dot 5 seconds back its own path.
+        // Kept gentle — soft flash, medium haptic, small shake — so it doesn't feel harsh.
+        Haptics.Medium();
+        _ui.FlashColor(new Color(0.4f, 0.8f, 1f, 1f), 0.25f);
+        _ui.ShowRewind();
+        _ui.PlayRewindEffect();
         _fx.PlayDecoyPop(_decoyPos[i]);
-        _shakeTimer = Mathf.Max(_shakeTimer, 0.2f);
-
-        // Cost a search tap (ping) with a punchy bar animation, if any remain.
-        if (_pings > 0)
-        {
-            _pings = Mathf.Max(0, _pings - GameConfig.DecoyPingCost);
-            _ui.LosePing(_pings);
-        }
-
-        _decoyHideUntil[i] = Time.time + GameConfig.DecoyHitBlackout; // blink out so you can cross
+        _shakeTimer = Mathf.Max(_shakeTimer, 0.12f);
+        _decoyHideUntil[i] = Time.time + 4f;
+        _player.TriggerRewind();             // plays the rewind sound + retrace + reveal wipe
     }
 
     private void PulseExit()

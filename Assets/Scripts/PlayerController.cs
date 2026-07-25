@@ -1,13 +1,15 @@
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// The glowing dot. Dynamic Rigidbody2D (walls physically block it) driven by velocity.
-/// Touch feels like a FLOATING JOYSTICK: press anywhere, and the drag vector from that
-/// point steers the dot (magnitude scales speed). A quick tap that never leaves the
-/// deadzone fires a ping instead. WASD/arrows also work.
+/// The glowing dot. Movement is FRAME-RATE and DIRECT: while you drag, the dot moves by
+/// your finger's world delta every rendered frame (no physics step, no interpolation, no
+/// catch-up), with wall collisions resolved by a swept CircleCast + slide. This is what
+/// makes it feel glued to your thumb. A quick touch that never becomes a drag = a ping.
+/// WASD/arrows also work.
 ///
-/// Juice: the dot squashes toward its motion, breathes when idle, drags a trail, and
-/// kicks up particles + a light haptic when it scrapes a wall.
+/// It also records a short position history so touching a decoy can rewind the dot 5s.
 /// </summary>
 [RequireComponent(typeof(Rigidbody2D))]
 public class PlayerController : MonoBehaviour
@@ -17,30 +19,45 @@ public class PlayerController : MonoBehaviour
     private GameManager _gm;
     private SonarManager _sonar;
     private FxManager _fx;
+    private ProceduralAudio _audio;
     private Transform _glow;
     private TrailRenderer _trail;
     private Vector3 _glowBase;
     private Vector3 _glowScale;
-    private float _spawnT = 1f; // 0..1 pop-in progress (1 = done)
+    private float _spawnT = 1f;
 
-    // Gesture state.
-    private bool _pointerActive;
+    // Drag state.
     private bool _dragging;
     private Vector2 _downScreen;
     private float _downTime;
-    private Vector2 _moveDir;   // normalized steer direction
-    private float _moveMag;     // 0..1 speed scale
+    private Vector2 _fingerPrevWorld;
+    private Vector2 _estVel;         // estimated velocity (for squash + audio), since we're kinematic
+    private float _lastSlideFx;
 
-    private float _lastSlideTime;
-    private float _lastSlideHaptic;
+    // Collision casting.
+    private ContactFilter2D _castFilter;
+    private readonly List<RaycastHit2D> _castHits = new List<RaycastHit2D>(8);
 
-    public void Init(GameManager gm, SonarManager sonar, Camera cam, Transform glow, FxManager fx, TrailRenderer trail)
+    // Path history for the rewind penalty.
+    private readonly List<Vector2> _pathPos = new List<Vector2>(160);
+    private readonly List<float> _pathTime = new List<float>(160);
+    private float _lastSample;
+
+    public bool IsRewinding { get; private set; }
+    public bool Moving => _estVel.sqrMagnitude > 0.4f;
+
+    public void Init(GameManager gm, SonarManager sonar, Camera cam, Transform glow,
+                     FxManager fx, TrailRenderer trail, ProceduralAudio audio)
     {
-        _gm = gm; _sonar = sonar; _cam = cam; _fx = fx; _glow = glow; _trail = trail;
+        _gm = gm; _sonar = sonar; _cam = cam; _glow = glow; _fx = fx; _trail = trail; _audio = audio;
         _rb = GetComponent<Rigidbody2D>();
         _glowBase = Vector3.one * GameConfig.PlayerGlowScale;
         _glowScale = _glowBase;
         if (_glow != null) _glow.localScale = _glowBase;
+
+        _castFilter = new ContactFilter2D();
+        _castFilter.NoFilter();
+        _castFilter.useTriggers = false;
     }
 
     public void PlaceAt(Vector2 worldPos)
@@ -48,10 +65,10 @@ public class PlayerController : MonoBehaviour
         _rb.position = worldPos;
         transform.position = new Vector3(worldPos.x, worldPos.y, 0f);
         _rb.linearVelocity = Vector2.zero;
-        _pointerActive = _dragging = false;
-        _moveMag = 0f;
+        _estVel = Vector2.zero;
+        _dragging = false;
+        _pathPos.Clear(); _pathTime.Clear();
 
-        // No streak from the previous level's position, and pop in instead of snapping.
         if (_trail != null) _trail.Clear();
         _spawnT = 0f;
         _glowScale = Vector3.zero;
@@ -60,73 +77,201 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
+        if (IsRewinding) { AnimateGlow(); return; }
+
         if (_gm.State != GameState.Playing)
         {
-            _pointerActive = _dragging = false;
-            _moveMag = 0f;
+            _dragging = false;
+            _estVel = Vector2.zero;
+            if (_audio != null) _audio.SetMoveLevel(0f);
             AnimateGlow();
             return;
         }
 
-        if (EchoInput.PingKeyDown) _gm.RequestPing();
+        float dt = Time.deltaTime;
+        Vector2 moveDelta = Vector2.zero;
 
-        // ---- Floating joystick ----
-        if (EchoInput.PointerDown)
+        // ---- WASD / arrows (fixed speed) ----
+        Vector2 wasd = EchoInput.MoveAxis;
+        if (wasd.sqrMagnitude > 0.01f)
         {
-            _pointerActive = true;
             _dragging = false;
-            _downScreen = EchoInput.PointerScreen;
-            _downTime = Time.time;
+            moveDelta = wasd * (GameConfig.PlayerMoveSpeed * dt);
         }
-
-        if (_pointerActive && EchoInput.PointerHeld)
+        else
         {
-            Vector2 delta = EchoInput.PointerScreen - _downScreen;
-            float dist = delta.magnitude;
-            if (!_dragging && (dist > GameConfig.JoystickDeadzonePx ||
-                               Time.time - _downTime > GameConfig.TapMaxDuration))
-                _dragging = true;
+            // ---- Direct finger-drag ----
+            if (EchoInput.PingKeyDown) _gm.RequestPing();
 
-            if (_dragging && dist > 0.0001f)
+            if (EchoInput.PointerDown)
             {
-                _moveDir = delta / dist;
-                _moveMag = Mathf.Clamp01(dist / GameConfig.JoystickFullThrowPx);
+                _dragging = false;
+                _downScreen = EchoInput.PointerScreen;
+                _downTime = Time.time;
+                _fingerPrevWorld = ScreenToWorld(_downScreen);
             }
-            else _moveMag = 0f;
+
+            if (EchoInput.PointerHeld)
+            {
+                Vector2 screen = EchoInput.PointerScreen;
+                if (!_dragging && (screen - _downScreen).magnitude > GameConfig.MoveEngagePx)
+                {
+                    _dragging = true;
+                    _fingerPrevWorld = ScreenToWorld(screen); // re-anchor so there's no jump
+                }
+
+                if (_dragging)
+                {
+                    Vector2 fingerWorld = ScreenToWorld(screen);
+                    moveDelta = (fingerWorld - _fingerPrevWorld) * GameConfig.MoveSensitivity;
+                    _fingerPrevWorld = fingerWorld;
+                }
+            }
+
+            if (EchoInput.PointerUp)
+            {
+                if (!_dragging) _gm.RequestPing(); // touch that never moved = a ping
+                _dragging = false;
+            }
         }
 
-        if (_pointerActive && EchoInput.PointerUp)
-        {
-            if (!_dragging) _gm.RequestPing(); // tap without drag = ping
-            _pointerActive = _dragging = false;
-            _moveMag = 0f;
-        }
+        // Apply movement with wall collision, and estimate velocity for juice/audio.
+        Vector2 moved = MoveWithCollision(moveDelta);
+        _estVel = dt > 0f ? moved / dt : Vector2.zero;
 
+        if (_audio != null)
+            _audio.SetMoveLevel(Mathf.Clamp01(_estVel.magnitude / GameConfig.PlayerMoveSpeed));
+
+        SamplePath();
         AnimateGlow();
     }
 
-    private void FixedUpdate()
+    /// <summary>Swept move with up to 3 collide-and-slide iterations. Returns the actual displacement.</summary>
+    private Vector2 MoveWithCollision(Vector2 delta)
     {
-        if (_gm.State != GameState.Playing) { _rb.linearVelocity = Vector2.zero; return; }
+        Vector2 start = _rb.position;
+        Vector2 pos = start;
+        float remaining = delta.magnitude;
+        if (remaining < 1e-6f) return Vector2.zero;
 
-        Vector2 wasd = EchoInput.MoveAxis;
-        if (wasd.sqrMagnitude > 0.01f)
-            _rb.linearVelocity = wasd * GameConfig.PlayerMoveSpeed;
-        else if (_dragging && _moveMag > 0f)
-            _rb.linearVelocity = _moveDir * (GameConfig.PlayerMoveSpeed * _moveMag);
-        else
-            _rb.linearVelocity = Vector2.zero;
+        Vector2 dir = delta / remaining;
+        float skin = GameConfig.PlayerCollideSkin;
+        float radius = GameConfig.PlayerRadius;
+
+        for (int iter = 0; iter < 3 && remaining > 1e-6f; iter++)
+        {
+            int n = Physics2D.CircleCast(pos, radius, dir, _castFilter, _castHits, remaining + skin);
+            RaycastHit2D best = default; float bestD = float.MaxValue; bool has = false;
+            for (int k = 0; k < n; k++)
+            {
+                if (!(_castHits[k].collider is BoxCollider2D)) continue; // walls only, not self
+                // Only block on surfaces we're moving INTO. When the dot already touches a wall,
+                // the cast reports it at distance 0 for every direction; without this guard, moving
+                // AWAY from the wall would get cancelled and the dot would stick (the freeze bug).
+                if (Vector2.Dot(dir, _castHits[k].normal) >= -1e-4f) continue;
+                if (_castHits[k].distance < bestD) { bestD = _castHits[k].distance; best = _castHits[k]; has = true; }
+            }
+
+            if (!has) { pos += dir * remaining; break; }
+
+            float travel = Mathf.Max(0f, bestD - skin);
+            pos += dir * travel;
+
+            // Slide the leftover motion along the wall.
+            Vector2 leftover = dir * (remaining - travel);
+            Vector2 nrm = best.normal;
+            Vector2 slide = leftover - Vector2.Dot(leftover, nrm) * nrm;
+
+            if (_fx != null && Time.time - _lastSlideFx > 0.05f)
+            {
+                _fx.PlaySlide(best.point);
+                _lastSlideFx = Time.time;
+                Haptics.Light();
+            }
+
+            remaining = slide.magnitude;
+            if (remaining < 1e-6f) break;
+            dir = slide / remaining;
+        }
+
+        _rb.position = pos;
+        transform.position = new Vector3(pos.x, pos.y, 0f);
+        return pos - start;
     }
 
-    /// <summary>Squash toward motion, or breathe when idle. Smoothed, no linear pops.</summary>
+    private void SamplePath()
+    {
+        if (Time.time - _lastSample < GameConfig.PathSampleStep) return;
+        _lastSample = Time.time;
+        _pathPos.Add(transform.position);
+        _pathTime.Add(Time.time);
+
+        // Drop anything older than the rewind window (+a little slack).
+        float cutoff = Time.time - (GameConfig.RewindSeconds + 1f);
+        int drop = 0;
+        while (drop < _pathTime.Count && _pathTime[drop] < cutoff) drop++;
+        if (drop > 0) { _pathPos.RemoveRange(0, drop); _pathTime.RemoveRange(0, drop); }
+    }
+
+    /// <summary>Freeze time and retrace the dot back to where it was ~5s ago (decoy penalty).</summary>
+    public void TriggerRewind()
+    {
+        if (!IsRewinding) StartCoroutine(RewindRoutine());
+    }
+
+    private IEnumerator RewindRoutine()
+    {
+        IsRewinding = true;
+        _dragging = false;
+        _estVel = Vector2.zero;
+        if (_audio != null) { _audio.SetMoveLevel(0f); _audio.PlayRewind(); }
+        Haptics.Heavy();
+        if (_sonar != null) _sonar.ResetPings(); // wipe the current reveal — back into the dark
+
+        // Path to retrace: everything recorded within the window, plus the current point last.
+        var path = new List<Vector2>(_pathPos);
+        path.Add(transform.position);
+        int last = path.Count - 1;
+
+        Time.timeScale = 0f; // stop the world; animate on unscaled time
+        float e = 0f;
+        while (e < GameConfig.RewindDuration)
+        {
+            e += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(e / GameConfig.RewindDuration);
+            float f = (1f - Easing.InOutSine(t)) * last;   // last -> 0 (now -> 5s ago), smooth ease
+            int i = Mathf.Clamp(Mathf.FloorToInt(f), 0, last);
+            int j = Mathf.Min(i + 1, last);
+            Vector2 p = Vector2.Lerp(path[i], path[j], f - i);
+            transform.position = new Vector3(p.x, p.y, 0f);
+            _rb.position = p;
+            AnimateGlow();
+            yield return null;
+        }
+
+        Vector2 final = path[0];
+        transform.position = new Vector3(final.x, final.y, 0f);
+        _rb.position = final;
+        _pathPos.Clear(); _pathTime.Clear();
+        if (_trail != null) _trail.Clear();
+
+        Time.timeScale = 1f;
+        IsRewinding = false;
+    }
+
+    private void OnDisable()
+    {
+        // Safety: never leave the game frozen if a rewind is interrupted (level reload, quit).
+        if (IsRewinding) { Time.timeScale = 1f; IsRewinding = false; }
+    }
+
     private void AnimateGlow()
     {
         if (_glow == null) return;
 
-        // Spawn pop-in takes priority — dot grows from nothing with an overshoot.
         if (_spawnT < 1f)
         {
-            _spawnT = Mathf.Min(1f, _spawnT + Time.deltaTime / GameConfig.SpawnPopTime);
+            _spawnT = Mathf.Min(1f, _spawnT + Time.unscaledDeltaTime / GameConfig.SpawnPopTime);
             float s = Easing.OutBack(_spawnT);
             _glowScale = _glowBase * s;
             _glow.localScale = _glowScale;
@@ -134,7 +279,7 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        Vector2 v = _rb.linearVelocity;
+        Vector2 v = _estVel;
         float speedFrac = Mathf.Clamp01(v.magnitude / GameConfig.PlayerMoveSpeed);
 
         Vector3 target;
@@ -153,24 +298,13 @@ public class PlayerController : MonoBehaviour
             _glow.localRotation = Quaternion.identity;
         }
 
-        _glowScale = Vector3.Lerp(_glowScale, target, Time.deltaTime * GameConfig.SquashLerp);
+        _glowScale = Vector3.Lerp(_glowScale, target, Time.unscaledDeltaTime * GameConfig.SquashLerp);
         _glow.localScale = _glowScale;
     }
 
-    private void OnCollisionStay2D(Collision2D col)
+    private Vector2 ScreenToWorld(Vector2 screen)
     {
-        if (_gm.State != GameState.Playing) return;
-        if (_rb.linearVelocity.sqrMagnitude < 1f) return;         // only when actually sliding
-        if (Time.time - _lastSlideTime < 0.05f) return;
-        if (col.contactCount == 0) return;
-
-        _lastSlideTime = Time.time;
-        if (_fx != null) _fx.PlaySlide(col.GetContact(0).point);
-
-        if (Time.time - _lastSlideHaptic > 0.12f)
-        {
-            Haptics.Light();
-            _lastSlideHaptic = Time.time;
-        }
+        var world = _cam.ScreenToWorldPoint(new Vector3(screen.x, screen.y, -_cam.transform.position.z));
+        return new Vector2(world.x, world.y);
     }
 }

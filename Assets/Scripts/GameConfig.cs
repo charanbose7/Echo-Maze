@@ -31,7 +31,7 @@ public static class GameConfig
     public const float WallThickness      = 0.12f;
 
     // ---- Player ----
-    public const float PlayerMoveSpeed    = 5.2f;
+    public const float PlayerMoveSpeed    = 1.2f;
     public const float PlayerRadius       = 0.24f; // keep < CellSize/2
     public const float PlayerGlowScale    = 0.7f;
     public const float SquashAmount       = 0.28f; // stretch toward motion at full speed
@@ -41,11 +41,18 @@ public static class GameConfig
     public const float TrailTime          = 0.28f;
     public const float SpawnPopTime       = 0.4f;  // dot "materializes" instead of snapping in
 
-    // ---- Touch / input ----
-    public const float JoystickDeadzonePx = 22f;   // finger travel under this = a tap (ping), not a move
-    public const float JoystickFullThrowPx= 150f;  // finger travel for full-speed movement
-    public const float TapMaxDuration      = 0.22f;// held longer than this = a drag, not a tap
-    public const float PointerDeadzone     = 0.05f;
+    // ---- Touch / input (direct finger-drag, frame-rate, collide-and-slide) ----
+    public const float MoveEngagePx      = 8f;    // finger travel before the dot starts following (small = responsive)
+    public const float MoveSensitivity   = .5f;  // 1.0 = the dot tracks the finger 1:1 in world space
+    public const float PlayerCollideSkin = 0.02f; // gap kept from walls when sliding
+    public const float TapMaxDuration    = 0.22f; // quick touch that never engaged movement = a ping
+    public const float MoveAudioMaxVol   = 0.16f; // loudest the movement drone gets
+    public const float HintMaxSeconds    = 12f;   // level-1 tutorial auto-dismiss
+
+    // ---- Rewind penalty (touching a decoy) ----
+    public const float RewindSeconds   = 5f;    // how far back the dot is sent
+    public const float RewindDuration  = 1.0f;  // unscaled length of the whole rewind sequence
+    public const float PathSampleStep  = 0.05f; // how often the dot's position is recorded
 
     // ---- Sonar (ranges lerped across the ramp) ----
     public const int   MaxPings           = 4;     // must match MAX_PINGS in SonarWall.shader

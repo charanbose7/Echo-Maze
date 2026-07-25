@@ -21,11 +21,16 @@ public class UIManager : MonoBehaviour
 
     private Image _streakGlow;
     private GameObject _startOverlay, _celebOverlay, _hint;
+    private Text _hintText;
     private Text _startSub, _celebTitle, _celebScore;
     private Image[] _stars = new Image[3];
     private Text _newBest;
+    private Text _rewindText;
+    private float _rewindT = -1f;
 
     private Image _flash, _dark, _cover;
+    private Image _rewindOverlay, _scanBar;
+    private float _rewindFxT = -1f;
 
     // Animation state (all mutated in Update, no per-frame allocation).
     private float _flashA, _darkA;
@@ -97,12 +102,27 @@ public class UIManager : MonoBehaviour
         _dark  = FullScreen("Dark",  new Color(0, 0, 0, 0));
         _flash = FullScreen("Flash", new Color(1, 1, 1, 0));
 
+        // Rewind screen effect: a soft cyan tint + a scan bar that sweeps down.
+        _rewindOverlay = FullScreen("RewindTint", new Color(0.3f, 0.7f, 1f, 0f));
+        var barGO = new GameObject("ScanBar");
+        barGO.transform.SetParent(_canvas.transform, false);
+        _scanBar = barGO.AddComponent<Image>();
+        _scanBar.color = new Color(0.6f, 0.9f, 1f, 0f);
+        _scanBar.raycastTarget = false;
+        var brt = _scanBar.rectTransform;
+        brt.anchorMin = new Vector2(0f, 0.5f); brt.anchorMax = new Vector2(1f, 0.5f);
+        brt.pivot = new Vector2(0.5f, 0.5f);
+        brt.sizeDelta = new Vector2(0f, 16f); // full width, 16px tall
+
         _startOverlay = BuildStart();
         _celebOverlay = BuildCeleb();
         _hint = BuildHint();
 
         _newBest = Text_("NewBest", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 470), new Vector2(900, 90), 64, TextAnchor.MiddleCenter, "NEW BEST!");
         _newBest.color = new Color(1f, 0.85f, 0.3f, 0f);
+
+        _rewindText = Text_("Rewind", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 140), new Vector2(1000, 120), 74, TextAnchor.MiddleCenter, "REWIND  -5s");
+        _rewindText.color = new Color(0.5f, 0.85f, 1f, 0f);
 
         // Top-most: opaque cover for masking the between-level swap (created last = drawn last).
         _cover = FullScreen("Cover", new Color(0, 0, 0, 0));
@@ -206,6 +226,8 @@ public class UIManager : MonoBehaviour
 
     public void ShowNewBest() => _newBestT = 0f;
     public void HideNewBest() { _newBestT = -1f; _newBest.color = new Color(1f, 0.85f, 0.3f, 0f); }
+    public void ShowRewind() => _rewindT = 0f;
+    public void PlayRewindEffect() => _rewindFxT = 0f;
     public void Flash(float strength) { _flashColor = Color.white; _flashA = Mathf.Max(_flashA, strength); }
     public void FlashColor(Color c, float strength) { _flashColor = c; _flashA = Mathf.Max(_flashA, strength); }
     public void DarkFlash() => _darkA = Mathf.Max(_darkA, GameConfig.PingDarkenAmount);
@@ -284,6 +306,50 @@ public class UIManager : MonoBehaviour
             img.color = Color.Lerp(DotLost, DotUsed, e);
             if (_lostDotT >= 1f) { img.rectTransform.localScale = Vector3.one; img.color = DotUsed; _lostDot = -1; }
         }
+
+        // Rewind callout: pop in, hold, fade (unscaled so it shows during the time-freeze).
+        if (_rewindT >= 0f)
+        {
+            _rewindT += dt;
+            float t = _rewindT;
+            float pop = t < 0.3f ? Easing.OutBack(t / 0.3f) : 1f;
+            float alpha = t < 0.9f ? 1f : Mathf.Clamp01(1f - (t - 0.9f) / 0.5f);
+            _rewindText.transform.localScale = Vector3.one * pop;
+            _rewindText.color = new Color(0.5f, 0.85f, 1f, alpha);
+            if (t > 1.4f) _rewindT = -1f;
+        }
+
+        // Rewind screen effect: gentle cyan tint + a scan bar sweeping down a few times.
+        if (_rewindFxT >= 0f)
+        {
+            _rewindFxT += dt;
+            float dur = GameConfig.RewindDuration;
+            float t = Mathf.Clamp01(_rewindFxT / dur);
+            float fade = 1f - t; // ease the whole effect out toward the end
+
+            float tint = (0.08f + 0.03f * Mathf.Sin(Time.unscaledTime * 12f)) * fade; // soft, no strobe
+            _rewindOverlay.color = new Color(0.3f, 0.7f, 1f, tint);
+
+            float frac = Mathf.Repeat(t * 3f, 1f);                       // 3 downward sweeps
+            _scanBar.rectTransform.anchoredPosition = new Vector2(0f, Mathf.Lerp(960f, -960f, frac));
+            _scanBar.color = new Color(0.6f, 0.9f, 1f, 0.45f * fade);
+
+            if (_rewindFxT >= dur)
+            {
+                _rewindFxT = -1f;
+                _rewindOverlay.color = new Color(0.3f, 0.7f, 1f, 0f);
+                _scanBar.color = new Color(0.6f, 0.9f, 1f, 0f);
+            }
+        }
+
+        // Tutorial hint pulse so it's actually noticed.
+        if (_hint != null && _hint.activeSelf)
+        {
+            float a = 0.62f + 0.35f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f));
+            _hintText.color = new Color(0.75f, 0.9f, 1f, a);
+            float sc = 1f + 0.04f * Mathf.Sin(Time.unscaledTime * 3f);
+            _hintText.rectTransform.localScale = new Vector3(sc, sc, 1f);
+        }
     }
 
     // ---------- builders ----------
@@ -358,11 +424,13 @@ public class UIManager : MonoBehaviour
         return go;
     }
 
+    public void SetHintText(string s) { if (_hintText != null) _hintText.text = s; }
+
     private GameObject BuildHint()
     {
-        var t = Text_("Hint", _safe, new Vector2(0.5f, 0f), new Vector2(0, 120), new Vector2(900, 80), 38, TextAnchor.LowerCenter, "drag to move  ·  tap to ping");
-        t.color = new Color(0.8f, 0.9f, 1f, 0.7f);
-        t.gameObject.SetActive(false);
-        return t.gameObject;
+        _hintText = Text_("Hint", _safe, new Vector2(0.5f, 0.5f), new Vector2(0, -300), new Vector2(1000, 120), 48, TextAnchor.MiddleCenter, "DRAG to move   •   TAP to ping");
+        _hintText.color = new Color(0.75f, 0.9f, 1f, 0.9f);
+        _hintText.gameObject.SetActive(false);
+        return _hintText.gameObject;
     }
 }
