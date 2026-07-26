@@ -36,6 +36,8 @@ public class GameManager : MonoBehaviour
     private MazeData _maze;
     private Difficulty _profile;
     private float _levelTimer;
+    private float _pingReadyTime;   // ping cooldown gate
+    private int _lastTickSecond;    // for timer audio cues
     private bool _hintPending;
     private bool _hintMoved, _hintPinged;
     private float _hintTimer;
@@ -48,7 +50,8 @@ public class GameManager : MonoBehaviour
     private readonly List<Vector2Int> _nbrScratch = new List<Vector2Int>(4);
 
     // Decoys.
-    private SpriteRenderer[] _decoySR;
+    private SpriteRenderer[] _decoySR;      // pulsing hazard ball
+    private SpriteRenderer[] _decoyRingSR;  // hollow highlight ring, lit by the sonar reveal
     private Vector2[] _decoyPos;
     private float[] _decoyHideUntil;
     private float[] _decoyPhase;
@@ -69,10 +72,12 @@ public class GameManager : MonoBehaviour
 
         // Decoy pool.
         var decoyMat = new Material(Shader.Find("EchoMaze/Additive")) { name = "DecoyMat" };
-        var decoySprite = VisualUtils.RadialGlow();
+        var ballSprite = VisualUtils.RadialGlow(); // the pulsing hazard
+        var ringSprite = VisualUtils.HollowRing(); // the reveal highlight (clean circle outline)
         var container = new GameObject("Decoys").transform;
         container.SetParent(transform, false);
         _decoySR = new SpriteRenderer[GameConfig.MaxDecoys];
+        _decoyRingSR = new SpriteRenderer[GameConfig.MaxDecoys];
         _decoyPos = new Vector2[GameConfig.MaxDecoys];
         _decoyHideUntil = new float[GameConfig.MaxDecoys];
         _decoyPhase = new float[GameConfig.MaxDecoys];
@@ -81,11 +86,22 @@ public class GameManager : MonoBehaviour
             var go = new GameObject("Decoy" + i);
             go.transform.SetParent(container, false);
             var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = decoySprite; sr.sharedMaterial = decoyMat;
+            sr.sprite = ballSprite; sr.sharedMaterial = decoyMat;
             sr.color = GameConfig.DecoyColor; sr.sortingOrder = 28;
             go.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.7f);
             go.SetActive(false);
             _decoySR[i] = sr;
+
+            // Hollow highlight ring, drawn a touch larger, sitting around the ball.
+            var rgo = new GameObject("DecoyRing" + i);
+            rgo.transform.SetParent(container, false);
+            var rsr = rgo.AddComponent<SpriteRenderer>();
+            rsr.sprite = ringSprite; rsr.sharedMaterial = decoyMat;
+            rsr.color = GameConfig.DecoyRingColor; rsr.sortingOrder = 29;
+            // Bigger than the ball so the outline sits clearly AROUND it (ring ~0.86*scale across).
+            rgo.transform.localScale = Vector3.one * (GameConfig.CellSize * 1.35f);
+            rgo.SetActive(false);
+            _decoyRingSR[i] = rsr;
         }
     }
 
@@ -129,6 +145,8 @@ public class GameManager : MonoBehaviour
         _ui.SetStreak(_streak, _streakMul);
 
         _levelTimer = _profile.timeLimit;
+        _pingReadyTime = 0f;
+        _lastTickSecond = int.MaxValue;
         FitCamera(_maze);
 
         _hintPending = level == 1 && !SaveData.HintSeen;
@@ -162,7 +180,11 @@ public class GameManager : MonoBehaviour
     private void PlaceDecoys(int count)
     {
         _decoyCount = 0;
-        for (int i = 0; i < GameConfig.MaxDecoys; i++) _decoySR[i].gameObject.SetActive(false);
+        for (int i = 0; i < GameConfig.MaxDecoys; i++)
+        {
+            _decoySR[i].gameObject.SetActive(false);
+            _decoyRingSR[i].gameObject.SetActive(false);
+        }
 
         var path = _maze.solutionPath;
         if (path == null || path.Count < 4 || count <= 0) return;
@@ -184,10 +206,17 @@ public class GameManager : MonoBehaviour
             _decoyPos[placed] = pos;
             _decoyHideUntil[placed] = 0f;
             _decoyPhase[placed] = Random.Range(0f, Mathf.PI * 2f); // desync the blinking
+            var transparent = new Color(GameConfig.DecoyColor.r, GameConfig.DecoyColor.g, GameConfig.DecoyColor.b, 0f);
+
             var sr = _decoySR[placed];
             sr.transform.position = new Vector3(pos.x, pos.y, 0f);
-            sr.color = new Color(GameConfig.DecoyColor.r, GameConfig.DecoyColor.g, GameConfig.DecoyColor.b, 0f);
+            sr.color = transparent;
             sr.gameObject.SetActive(true);
+
+            var ring = _decoyRingSR[placed];
+            ring.transform.position = new Vector3(pos.x, pos.y, 0f);
+            ring.color = transparent;
+            ring.gameObject.SetActive(true);
             placed++;
         }
         _decoyCount = placed;
@@ -196,13 +225,15 @@ public class GameManager : MonoBehaviour
     public void RequestPing()
     {
         if (State != GameState.Playing) return;
-        if (_hintPending && !_hintPinged) { _hintPinged = true; RefreshHint(); }
-        if (_pings <= 0) return; // no ping left, but you can still move blind
+        if (Time.time < _pingReadyTime) return;  // cooldown: can't spam — wait for the reveal to finish
+        if (_pings <= 0) return;                  // out of pings, but you can still move blind
 
+        if (_hintPending && !_hintPinged) { _hintPinged = true; RefreshHint(); }
         _pings--;
         _ui.SetPingsRemaining(_pings);
         _ui.DarkFlash();                 // brief darken so the ring burst reads as powerful
         _sonar.EmitPing(_player.transform.position);
+        _pingReadyTime = Time.time + GameConfig.PingCooldown;
     }
 
     private void Update()
@@ -233,7 +264,17 @@ public class GameManager : MonoBehaviour
         if (_profile.timeLimit > 0f)
         {
             _levelTimer -= Time.deltaTime;
-            _ui.SetTimer(Mathf.CeilToInt(Mathf.Max(0f, _levelTimer)));
+            int secs = Mathf.CeilToInt(Mathf.Max(0f, _levelTimer));
+            _ui.SetTimer(secs);
+
+            // Audio cues: one heads-up at 10s, then a rising tick each of the last 5 seconds.
+            if (secs != _lastTickSecond)
+            {
+                if (secs == GameConfig.TimerWarnAt) _audio.PlayTimeWarning();
+                else if (secs >= 1 && secs <= GameConfig.TimerTickFrom) _audio.PlayCountdownTick(secs);
+                _lastTickSecond = secs;
+            }
+
             if (_levelTimer <= 0f) { FailLevel(); return; }
         }
         else _ui.SetTimer(-1);
@@ -282,33 +323,38 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < _decoyCount; i++)
         {
             var sr = _decoySR[i];
+            bool blackedOut = Time.time < _decoyHideUntil[i]; // just triggered a rewind, stays gone briefly
 
-            // Fade in and out on its own phase. Invisible for ~half the cycle -> that's your
-            // window to slip through the cell unpunished.
+            // Pulsing orange ball (the hazard): fades in and out on its own phase — slip through
+            // the cell while it's dark, and it only bites while it's visible.
             float wave = Mathf.Sin(Time.time * GameConfig.DecoyFadeSpeed + _decoyPhase[i]);
             float vis = Mathf.Clamp01(wave); vis *= vis;
-
-            bool blackedOut = Time.time < _decoyHideUntil[i]; // just took your ping, letting you pass
             float alpha = blackedOut ? 0f : vis * GameConfig.DecoyMaxAlpha;
-
             var c = GameConfig.DecoyColor; c.a = alpha;
             sr.color = c;
             sr.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.55f + 0.2f * vis));
 
-            // Only bites while it's actually visible.
+            // Hollow highlight ring around it: lit by the SONAR as the ping front sweeps over the
+            // decoy (same timing as the walls), so a ping also shows you where the decoys are.
+            float reveal = blackedOut ? 0f : _sonar.RevealAt(_decoyPos[i]);
+            var rc = GameConfig.DecoyRingColor; rc.a = Mathf.Clamp01(reveal * 1.25f);
+            _decoyRingSR[i].color = rc;
+
+            // Unchanged: only bites while the ball is actually visible.
             if (!blackedOut && vis > GameConfig.DecoyVisibleHit &&
                 (pp - _decoyPos[i]).sqrMagnitude < hitRadiusSqr)
             {
                 HitDecoy(i);
-                return; // one hit is enough — the rewind takes over
+                return;
             }
         }
     }
 
     private void HitDecoy(int i)
     {
-        // Penalty: freeze time, wipe the reveal, and rewind the dot 5 seconds back its own path.
+        // Penalty: freeze time, wipe the reveal, and rewind the dot back its own path.
         // Kept gentle — soft flash, medium haptic, small shake — so it doesn't feel harsh.
+        _audio.PlayWrong();                  // collision "thunk" the instant you touch it
         Haptics.Medium();
         _ui.FlashColor(new Color(0.4f, 0.8f, 1f, 1f), 0.25f);
         _ui.ShowRewind();
@@ -408,6 +454,7 @@ public class GameManager : MonoBehaviour
         _ui.SetStreak(0, 1f);
         _ui.Flash(0.4f);
         Haptics.Heavy();
+        _audio.PlayLose();
         BuildLevel(_level);                  // rebuild same level (rubber-banding via _failStreak)
         State = GameState.Playing;
     }

@@ -38,7 +38,8 @@ public static class GameConfig
     public const float SquashLerp         = 12f;
     public const float BreathAmplitude    = 0.06f; // idle "breathing" pulse
     public const float BreathSpeed        = 2.4f;
-    public const float TrailTime          = 0.28f;
+    public const float TrailTime          = 0.12f; // short so fast moves don't leave a long sharp streak
+    public const float TrailWidth         = 0.11f;
     public const float SpawnPopTime       = 0.4f;  // dot "materializes" instead of snapping in
 
     // ---- Touch / input (direct finger-drag, frame-rate, collide-and-slide) ----
@@ -50,12 +51,17 @@ public static class GameConfig
     public const float HintMaxSeconds    = 12f;   // level-1 tutorial auto-dismiss
 
     // ---- Rewind penalty (touching a decoy) ----
-    public const float RewindSeconds   = 5f;    // how far back the dot is sent
+    public const float RewindSeconds   = 2f;    // how far back the dot is sent
     public const float RewindDuration  = 1.0f;  // unscaled length of the whole rewind sequence
     public const float PathSampleStep  = 0.05f; // how often the dot's position is recorded
 
+    // ---- Timer audio cues ----
+    public const int   TimerWarnAt     = 10;    // one warning cue when this many seconds remain
+    public const int   TimerTickFrom   = 5;     // tick every second at/under this many remaining
+
     // ---- Sonar (ranges lerped across the ramp) ----
     public const int   MaxPings           = 4;     // must match MAX_PINGS in SonarWall.shader
+    public const float PingCooldown       = 1.1f;  // can't fire another ping until the last reveal finishes
     public const float RingSpeedStart     = 6.5f;
     public const float RingSpeedEnd       = 8.0f;
     public const float FadeStart          = 2.2f;  // easy: walls linger
@@ -134,6 +140,7 @@ public static class GameConfig
     public static readonly Color ExitColor       = new Color(0.4f, 1.0f, 0.7f, 1f);
     public static readonly Color RingColor       = new Color(0.6f, 0.85f, 1.0f, 1f);
     public static readonly Color DecoyColor      = new Color(1.0f, 0.5f, 0.35f, 1f); // warm = "not the exit"
+    public static readonly Color DecoyRingColor  = new Color(1.0f, 0.22f, 0.22f, 1f); // red highlight outline
     public static readonly Color StreakColor     = new Color(1.0f, 0.6f, 0.15f, 1f); // flame
 
     /// <summary>

@@ -96,7 +96,8 @@ public class UIManager : MonoBehaviour
         rowGO.transform.SetParent(_safe, false);
         _pingRow = rowGO.AddComponent<RectTransform>();
         _pingRow.anchorMin = _pingRow.anchorMax = new Vector2(1, 1); _pingRow.pivot = new Vector2(1, 1);
-        _pingRow.anchoredPosition = new Vector2(-30, -30); _pingRow.sizeDelta = new Vector2(700, 40);
+        // Its own line BELOW the score so a long dot row never overlaps the score number.
+        _pingRow.anchoredPosition = new Vector2(-30, -100); _pingRow.sizeDelta = new Vector2(800, 36);
 
         // Full-screen effect layers (outside safe area on purpose).
         _dark  = FullScreen("Dark",  new Color(0, 0, 0, 0));
@@ -121,7 +122,7 @@ public class UIManager : MonoBehaviour
         _newBest = Text_("NewBest", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 470), new Vector2(900, 90), 64, TextAnchor.MiddleCenter, "NEW BEST!");
         _newBest.color = new Color(1f, 0.85f, 0.3f, 0f);
 
-        _rewindText = Text_("Rewind", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 140), new Vector2(1000, 120), 74, TextAnchor.MiddleCenter, "REWIND  -5s");
+        _rewindText = Text_("Rewind", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 140), new Vector2(1000, 120), 74, TextAnchor.MiddleCenter, "REWIND  -" + Mathf.RoundToInt(GameConfig.RewindSeconds) + "s");
         _rewindText.color = new Color(0.5f, 0.85f, 1f, 0f);
 
         // Top-most: opaque cover for masking the between-level swap (created last = drawn last).
@@ -146,7 +147,7 @@ public class UIManager : MonoBehaviour
         foreach (var d in _dots) if (d) Destroy(d.gameObject);
         _dots.Clear();
         _lostDot = -1;
-        const float sz = 26f, gap = 9f;
+        const float sz = 20f, gap = 6f;
         for (int i = 0; i < total; i++)
         {
             var go = new GameObject("Dot" + i);

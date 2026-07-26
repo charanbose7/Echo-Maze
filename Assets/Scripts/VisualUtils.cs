@@ -110,6 +110,33 @@ public static class VisualUtils
         return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
 
+    /// <summary>
+    /// Crisp hollow-circle OUTLINE near the sprite edge (for the decoy highlight). Because the
+    /// ring sits at ~0.86 of the radius, a localScale of S gives a circle ~0.86*S world units
+    /// across — so scaling it a bit above the ball's size draws the ring cleanly AROUND the ball.
+    /// </summary>
+    public static Sprite HollowRing(int size = 256, float radiusFrac = 0.86f, float thickness = 0.07f)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float dx = (x - c) / c, dy = (y - c) / c;
+            float d = Mathf.Sqrt(dx * dx + dy * dy);   // 0 center .. 1 at edge midpoints
+            float ring = Mathf.Abs(d - radiusFrac);    // distance from the ring line
+            float a = Mathf.Clamp01(1f - ring / thickness);
+            a *= a;                                    // slightly crisp edge
+            px[y * size + x] = new Color(1f, 1f, 1f, a);
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
     /// <summary>Filled 5-point star (for the level-clear star rating).</summary>
     public static Sprite Star(int size = 96)
     {

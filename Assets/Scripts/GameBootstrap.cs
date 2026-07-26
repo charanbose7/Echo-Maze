@@ -85,7 +85,7 @@ public class GameBootstrap : MonoBehaviour
         trailGO.transform.SetParent(playerGO.transform, false);
         var trail = trailGO.AddComponent<TrailRenderer>();
         trail.time = GameConfig.TrailTime;
-        trail.startWidth = 0.16f; trail.endWidth = 0f;
+        trail.startWidth = GameConfig.TrailWidth; trail.endWidth = 0f;
         trail.numCapVertices = 4;
         trail.minVertexDistance = 0.02f;
         trail.autodestruct = false;

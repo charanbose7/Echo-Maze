@@ -13,7 +13,7 @@ public class ProceduralAudio : MonoBehaviour
     private AudioSource _tick;   // ticks (own source so they overlap the ping)
     private AudioSource _move;   // looping movement whoosh (volume rides speed)
 
-    private AudioClip _ping, _tickClip, _win, _streak, _star, _wrong, _moveClip, _rewind;
+    private AudioClip _ping, _tickClip, _win, _streak, _star, _wrong, _moveClip, _rewind, _lose, _timeWarn, _countTick;
     private float _moveTargetVol, _moveLevel;
 
     public void Init()
@@ -34,6 +34,9 @@ public class ProceduralAudio : MonoBehaviour
         _star     = BuildSweep(1200f, 1600f, 0.09f, 0.45f);
         _wrong    = BuildSweep(220f, 150f, 0.18f, 0.5f);
         _rewind   = BuildRewind();
+        _lose     = BuildArpeggio(new[] { 392f, 311f, 233f }, 0.18f, 0.5f); // descending = "aww, failed"
+        _timeWarn = BuildSweep(620f, 620f, 0.18f, 0.45f);                   // steady heads-up beep
+        _countTick= BuildSweep(1000f, 1000f, 0.05f, 0.5f);                  // short countdown tick
         _moveClip = BuildMoveLoop();
 
         _move.clip = _moveClip;
@@ -42,6 +45,16 @@ public class ProceduralAudio : MonoBehaviour
 
     /// <summary>Time-rewind shimmer for the decoy penalty (kept gentle).</summary>
     public void PlayRewind() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_rewind, 0.6f); } }
+
+    public void PlayLose() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_lose, 0.8f); } }
+    public void PlayTimeWarning() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_timeWarn, 0.5f); } }
+    /// <summary>Countdown tick; pitch rises as the last seconds run out for urgency.</summary>
+    public void PlayCountdownTick(int secsLeft)
+    {
+        if (_main == null) return;
+        _main.pitch = 1f + (5 - Mathf.Clamp(secsLeft, 1, 5)) * 0.12f;
+        _main.PlayOneShot(_countTick, 0.55f);
+    }
 
     /// <summary>0 = still (silent), 1 = full speed. Called by the player each frame.</summary>
     public void SetMoveLevel(float level)

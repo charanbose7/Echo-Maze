@@ -98,6 +98,26 @@ public class SonarManager : MonoBehaviour
         _band = d.band;
     }
 
+    /// <summary>
+    /// Current sonar reveal intensity (0..1) at a world position, using the same timing as the
+    /// wall shader. Lets decoy highlights light up exactly as the ring front sweeps over them.
+    /// </summary>
+    public float RevealAt(Vector2 p)
+    {
+        float best = 0f;
+        for (int i = 0; i < _pings.Length; i++)
+        {
+            var ping = _pings[i];
+            if (!ping.active) continue;
+            float dist = Vector2.Distance(p, ping.origin);
+            float ringR = (Time.time - ping.startTime) * _speed;
+            float ts = (ringR - dist) / _speed;
+            if (ts < 0f) continue;
+            best = Mathf.Max(best, Mathf.Clamp01(1f - ts / _fade));
+        }
+        return best;
+    }
+
     /// <summary>Cache wall centers for tick detection; sizes the per-ping "ticked" arrays.</summary>
     public void SetWalls(System.Collections.Generic.List<WallSegment> walls)
     {
