@@ -80,6 +80,18 @@ public class GameBootstrap : MonoBehaviour
         glowSR.sortingOrder = 50;
         glow.transform.localScale = Vector3.one * GameConfig.PlayerGlowScale;
 
+        // Beacon halo behind the dot — a soft pulsing aura that keeps the eye on the player.
+        var halo = new GameObject("Halo");
+        halo.transform.SetParent(playerGO.transform, false);
+        var haloSR = halo.AddComponent<SpriteRenderer>();
+        haloSR.sprite = _glowSprite;
+        haloSR.sharedMaterial = _glowMat;
+        haloSR.color = GameConfig.PlayerColor;
+        haloSR.sortingOrder = 49; // behind the core glow (50)
+        halo.AddComponent<PulseGlow>().Configure(
+            GameConfig.PlayerColor, GameConfig.PlayerGlowScale * 1.9f, GameConfig.PlayerGlowScale * 0.3f,
+            0.22f, 0.16f, 2.4f);
+
         // Motion trail.
         var trailGO = new GameObject("Trail");
         trailGO.transform.SetParent(playerGO.transform, false);

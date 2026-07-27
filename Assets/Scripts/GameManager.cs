@@ -22,6 +22,7 @@ public class GameManager : MonoBehaviour
     private WallShaderController _wallCtrl;
     private FxManager _fx;
     private SpriteRenderer _exitSR;
+    private SpriteRenderer _exitRingSR;
     private Transform _vignette;
 
     // Progress.
@@ -103,6 +104,15 @@ public class GameManager : MonoBehaviour
             rgo.SetActive(false);
             _decoyRingSR[i] = rsr;
         }
+
+        // Exit target ring — a pulsing green marker that makes the destination pop.
+        var exitRingGO = new GameObject("ExitRing");
+        exitRingGO.transform.SetParent(transform, false);
+        _exitRingSR = exitRingGO.AddComponent<SpriteRenderer>();
+        _exitRingSR.sprite = VisualUtils.HollowRing();
+        _exitRingSR.sharedMaterial = decoyMat;
+        _exitRingSR.color = GameConfig.ExitColor;
+        _exitRingSR.sortingOrder = 29;
     }
 
     public void StartGame()
@@ -130,6 +140,7 @@ public class GameManager : MonoBehaviour
         _exitWorld = _maze.exitPos;
         _exitSR.transform.position = new Vector3(_exitWorld.x, _exitWorld.y, 0f);
         _exitSR.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.8f);
+        _exitRingSR.transform.position = new Vector3(_exitWorld.x, _exitWorld.y, 0f);
 
         _movingExit = _profile.movingExit;
         _exitMoveTimer = _profile.exitMoveInterval;
@@ -375,6 +386,13 @@ public class GameManager : MonoBehaviour
         var c = GameConfig.ExitColor; c.a = alpha;
         _exitSR.color = c;
         _exitSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.8f + 0.25f * near));
+
+        // Pulsing target ring around the exit, brighter as you approach — makes the goal pop.
+        float ringPulse = 0.5f + 0.5f * Mathf.Sin(Time.time * GameConfig.ExitPulseSpeed * 1.3f);
+        _exitRingSR.transform.position = _exitSR.transform.position;
+        _exitRingSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (1.25f + 0.12f * ringPulse));
+        var rc = GameConfig.ExitColor; rc.a = 0.28f + 0.22f * ringPulse + 0.4f * near;
+        _exitRingSR.color = rc;
     }
 
     private IEnumerator WinRoutine()

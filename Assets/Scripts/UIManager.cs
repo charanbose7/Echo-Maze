@@ -15,9 +15,9 @@ public class UIManager : MonoBehaviour
     private RectTransform _safe;
 
     private Text _levelText, _scoreText, _timerText, _streakText;
-    private RectTransform _pingRow;
+    private Text _pingCountText;   // numeric reveal counter ("10  o")
+    private Image _pingIcon;       // single circle icon next to the count
     private Sprite _dotSprite;
-    private readonly List<Image> _dots = new List<Image>();
 
     private Image _streakGlow;
     private GameObject _startOverlay, _celebOverlay, _hint;
@@ -42,9 +42,9 @@ public class UIManager : MonoBehaviour
     private int _streakCount; private float _streakMul; private bool _streakOn;
     private float _newBestT = -1f;
     private int _lastTimer = int.MinValue;
-    private int _lostDot = -1; private float _lostDotT;
+    private float _pingFlashT = -1f;
 
-    private static readonly Color DotLost = new Color(1f, 0.3f, 0.2f, 1f);
+    private static readonly Color PingLostCol = new Color(1f, 0.35f, 0.3f, 1f);
 
     private static readonly Color DotFull = new Color(0.6f, 0.9f, 1f, 1f);
     private static readonly Color DotUsed = new Color(0.6f, 0.9f, 1f, 0.16f);
@@ -74,11 +74,16 @@ public class UIManager : MonoBehaviour
         _safe.offsetMin = Vector2.zero; _safe.offsetMax = Vector2.zero;
         safeGO.AddComponent<SafeArea>();
 
-        _levelText = Text_("Level", _safe, new Vector2(0, 1), new Vector2(30, -24), new Vector2(500, 60), 42, TextAnchor.UpperLeft, "LEVEL 1");
-        _timerText = Text_("Timer", _safe, new Vector2(0, 1), new Vector2(30, -84), new Vector2(500, 50), 32, TextAnchor.UpperLeft, "");
-        _scoreText = Text_("Score", _safe, new Vector2(0.5f, 1), new Vector2(0, -24), new Vector2(700, 70), 52, TextAnchor.UpperCenter, "0");
+        // Time: big, in the top-left corner.
+        _timerText = Text_("Timer", _safe, new Vector2(0, 1), new Vector2(34, -22), new Vector2(440, 92), 64, TextAnchor.UpperLeft, "");
 
-        // Streak flame + multiplier under the score.
+        // Level: top-middle and BIG — it's the main progression readout.
+        _levelText = Text_("Level", _safe, new Vector2(0.5f, 1), new Vector2(0, -16), new Vector2(780, 92), 70, TextAnchor.UpperCenter, "LEVEL 1");
+
+        // Score: centered, below the (now larger) level.
+        _scoreText = Text_("Score", _safe, new Vector2(0.5f, 1), new Vector2(0, -110), new Vector2(700, 64), 46, TextAnchor.UpperCenter, "0");
+
+        // Streak flame + multiplier below the score.
         var glowGO = new GameObject("StreakGlow");
         glowGO.transform.SetParent(_safe, false);
         _streakGlow = glowGO.AddComponent<Image>();
@@ -87,17 +92,20 @@ public class UIManager : MonoBehaviour
         _streakGlow.color = new Color(GameConfig.StreakColor.r, GameConfig.StreakColor.g, GameConfig.StreakColor.b, 0f);
         var grt = _streakGlow.rectTransform;
         grt.anchorMin = grt.anchorMax = new Vector2(0.5f, 1f); grt.pivot = new Vector2(0.5f, 1f);
-        grt.anchoredPosition = new Vector2(0, -96); grt.sizeDelta = new Vector2(220, 220);
-        _streakText = Text_("Streak", _safe, new Vector2(0.5f, 1), new Vector2(0, -104), new Vector2(400, 50), 34, TextAnchor.UpperCenter, "");
+        grt.anchoredPosition = new Vector2(0, -180); grt.sizeDelta = new Vector2(190, 190);
+        _streakText = Text_("Streak", _safe, new Vector2(0.5f, 1), new Vector2(0, -172), new Vector2(400, 50), 34, TextAnchor.UpperCenter, "");
         _streakText.color = new Color(1f, 0.8f, 0.4f, 0f);
 
-        // Ping dots (top-right).
-        var rowGO = new GameObject("PingRow");
-        rowGO.transform.SetParent(_safe, false);
-        _pingRow = rowGO.AddComponent<RectTransform>();
-        _pingRow.anchorMin = _pingRow.anchorMax = new Vector2(1, 1); _pingRow.pivot = new Vector2(1, 1);
-        // Its own line BELOW the score so a long dot row never overlaps the score number.
-        _pingRow.anchoredPosition = new Vector2(-30, -100); _pingRow.sizeDelta = new Vector2(800, 36);
+        // Reveal counter (top-right): a number followed by a single circle icon, e.g. "10  o".
+        _pingCountText = Text_("PingCount", _safe, new Vector2(1, 1), new Vector2(-82, -24), new Vector2(240, 74), 52, TextAnchor.UpperRight, "0");
+        _pingCountText.color = DotFull;
+        var iconGO = new GameObject("PingIcon");
+        iconGO.transform.SetParent(_safe, false);
+        _pingIcon = iconGO.AddComponent<Image>();
+        _pingIcon.sprite = _dotSprite; _pingIcon.color = DotFull; _pingIcon.raycastTarget = false;
+        var irt = _pingIcon.rectTransform;
+        irt.anchorMin = irt.anchorMax = new Vector2(1, 1); irt.pivot = new Vector2(1, 1);
+        irt.anchoredPosition = new Vector2(-34, -36); irt.sizeDelta = new Vector2(40, 40);
 
         // Full-screen effect layers (outside safe area on purpose).
         _dark  = FullScreen("Dark",  new Color(0, 0, 0, 0));
@@ -142,47 +150,30 @@ public class UIManager : MonoBehaviour
 
     public void RollScoreTo(int target) => _scoreTarget = target;
 
+    /// <summary>Reset the reveal counter for a new level (kept the old name so callers don't change).</summary>
     public void BuildPingDots(int total)
     {
-        foreach (var d in _dots) if (d) Destroy(d.gameObject);
-        _dots.Clear();
-        _lostDot = -1;
-        const float sz = 20f, gap = 6f;
-        for (int i = 0; i < total; i++)
-        {
-            var go = new GameObject("Dot" + i);
-            go.transform.SetParent(_pingRow, false);
-            var img = go.AddComponent<Image>();
-            img.sprite = _dotSprite; img.color = DotFull; img.raycastTarget = false;
-            var rt = img.rectTransform;
-            rt.anchorMin = rt.anchorMax = new Vector2(1, 0.5f); rt.pivot = new Vector2(1, 0.5f);
-            rt.sizeDelta = new Vector2(sz, sz);
-            rt.anchoredPosition = new Vector2(-i * (sz + gap), 0);
-            _dots.Add(img);
-        }
+        _pingFlashT = -1f;
+        _pingIcon.rectTransform.localScale = Vector3.one;
+        SetPingsRemaining(total);
     }
 
     public void SetPingsRemaining(int remaining)
     {
-        for (int i = 0; i < _dots.Count; i++)
-        {
-            int fromLeft = _dots.Count - 1 - i;
-            _dots[i].color = fromLeft < remaining ? DotFull : DotUsed;
-        }
+        _pingCountText.text = remaining.ToString();
+        Color col = remaining > 0 ? DotFull : new Color(1f, 0.45f, 0.45f, 1f);
+        _pingCountText.color = col;
+        _pingIcon.color = new Color(col.r, col.g, col.b, remaining > 0 ? 1f : 0.45f);
     }
 
-    /// <summary>Lose a ping to a decoy: recolor the bar and play a red shrink pop on the lost dot.</summary>
+    /// <summary>Lose a reveal: update the count and flash the counter red.</summary>
     public void LosePing(int remaining)
     {
         SetPingsRemaining(remaining);
-        int i = _dots.Count - 1 - remaining; // the dot that just went dark
-        if (i >= 0 && i < _dots.Count)
-        {
-            _lostDot = i;
-            _lostDotT = 0f;
-            _dots[i].color = DotLost;
-            _dots[i].rectTransform.localScale = Vector3.one * 1.7f;
-        }
+        _pingFlashT = 0f;
+        _pingCountText.color = PingLostCol;
+        _pingIcon.color = PingLostCol;
+        _pingIcon.rectTransform.localScale = Vector3.one * 1.5f;
     }
 
     public void SetTimer(int seconds)
@@ -297,15 +288,15 @@ public class UIManager : MonoBehaviour
             if (t > 1.8f) _newBestT = -1f;
         }
 
-        // Lost-ping dot: pops big + red, then shrinks and settles to the "used" look.
-        if (_lostDot >= 0 && _lostDot < _dots.Count && _lostDotT < 1f)
+        // Lost-reveal counter flash: red pop settling back to normal.
+        if (_pingFlashT >= 0f && _pingFlashT < 1f)
         {
-            _lostDotT = Mathf.Min(1f, _lostDotT + dt / 0.45f);
-            float e = Easing.OutCubic(_lostDotT);
-            var img = _dots[_lostDot];
-            img.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.7f, 1f, e);
-            img.color = Color.Lerp(DotLost, DotUsed, e);
-            if (_lostDotT >= 1f) { img.rectTransform.localScale = Vector3.one; img.color = DotUsed; _lostDot = -1; }
+            _pingFlashT = Mathf.Min(1f, _pingFlashT + dt / 0.45f);
+            float e = Easing.OutCubic(_pingFlashT);
+            _pingIcon.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.5f, 1f, e);
+            Color col = Color.Lerp(PingLostCol, DotFull, e);
+            _pingIcon.color = col; _pingCountText.color = col;
+            if (_pingFlashT >= 1f) { _pingIcon.rectTransform.localScale = Vector3.one; _pingFlashT = -1f; }
         }
 
         // Rewind callout: pop in, hold, fade (unscaled so it shows during the time-freeze).

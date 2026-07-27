@@ -75,16 +75,16 @@ public class FxManager : MonoBehaviour
         main.loop = true;
         main.playOnAwake = false;
         main.startLifetime = 6f;
-        main.startSpeed = 0.06f;
-        main.startSize = new ParticleSystem.MinMaxCurve(0.02f, 0.07f);
-        main.startColor = new Color(0.6f, 0.8f, 1f, 0.5f);
-        main.maxParticles = 120;
+        main.startSpeed = 0.09f;
+        main.startSize = new ParticleSystem.MinMaxCurve(0.02f, 0.13f); // some bigger "near" stars
+        main.startColor = new Color(0.75f, 0.88f, 1f, 0.9f);           // brighter, busier field
+        main.maxParticles = 320;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.gravityModifier = 0f;
 
-        var em = ps.emission; em.enabled = true; em.rateOverTime = 12f;
+        var em = ps.emission; em.enabled = true; em.rateOverTime = 32f;
         var sh = ps.shape; sh.enabled = true; sh.shapeType = ParticleSystemShapeType.Box; sh.scale = new Vector3(10, 10, 1);
-        SetFadeInOut(ps, 0.35f);
+        SetFadeInOut(ps, 0.35f); // fade in and out over life -> stars twinkle
 
         var r = go.GetComponent<ParticleSystemRenderer>();
         r.material = mat; r.sortingOrder = 5;

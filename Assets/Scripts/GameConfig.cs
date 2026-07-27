@@ -124,8 +124,8 @@ public static class GameConfig
     public const float PunchZoomTime      = 0.45f;
 
     // ---- Exit near-miss glow ----
-    public const float ExitPulseBaseAlpha = 0.16f;
-    public const float ExitPulseAmp       = 0.22f;
+    public const float ExitPulseBaseAlpha = 0.24f;
+    public const float ExitPulseAmp       = 0.28f;
     public const float ExitPulseSpeed     = 2.0f;
     public const float ExitNearRadius     = 4.0f;  // brighten the exit as player gets within this
     public const float ExitNearMaxBoost   = 0.55f;
