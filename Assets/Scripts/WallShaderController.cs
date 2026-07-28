@@ -44,6 +44,12 @@ public class WallShaderController : MonoBehaviour
         _meshFilter.sharedMesh = _mesh;
     }
 
+    /// <summary>Re-tint every wall at once (used by the per-sector palette shift).</summary>
+    public void SetGlowColor(Color c)
+    {
+        if (WallMaterial != null) WallMaterial.SetColor("_Color", c);
+    }
+
     public void Clear()
     {
         if (_colliderGO != null) Destroy(_colliderGO);

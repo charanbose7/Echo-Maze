@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 /// <summary>
 /// THE only thing you place in the scene by hand. Drop this on one empty GameObject and
@@ -22,6 +23,24 @@ public class GameBootstrap : MonoBehaviour
 
     private void Start()
     {
+        // ---- EventSystem ----
+        // REQUIRED for uGUI buttons to receive taps. Everything else in this game polls input
+        // directly (EchoInput), which needs no EventSystem — so without this, menu/settings
+        // buttons are completely dead. The project runs the new Input System only
+        // (activeInputHandler = 1), so it must be InputSystemUIInputModule, not the legacy one.
+        if (Object.FindFirstObjectByType<EventSystem>() == null)
+        {
+            var esGO = new GameObject("EventSystem");
+            esGO.AddComponent<EventSystem>();
+#if ENABLE_INPUT_SYSTEM
+            var module = esGO.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+            // Created at runtime it has no action asset, so give it the stock UI actions.
+            if (module.actionsAsset == null) module.AssignDefaultActions();
+#else
+            esGO.AddComponent<StandaloneInputModule>();
+#endif
+        }
+
         _glowMat = new Material(Shader.Find("EchoMaze/Additive")) { name = "GlowMat" };
         _glowSprite = VisualUtils.RadialGlow();
 

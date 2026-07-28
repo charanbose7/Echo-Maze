@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public enum GameState { Start, Playing, Celebrating }
+public enum GameState { Start, Playing, Celebrating, Tutorial }
 
 /// <summary>
 /// The brain: level flow, ping budget, fail timer, streak + star scoring, rubber-banding,
@@ -13,6 +13,12 @@ public enum GameState { Start, Playing, Celebrating }
 public class GameManager : MonoBehaviour
 {
     public GameState State { get; private set; } = GameState.Start;
+
+    /// <summary>Player may move/ping — true during normal play and while practising in the tutorial.</summary>
+    public bool AcceptsInput => (State == GameState.Playing || State == GameState.Tutorial) && !_ui.SettingsOpen;
+
+    /// <summary>A UI button was just pressed, so this tap must not also count as a gameplay tap.</summary>
+    public bool UiJustPressed => _ui != null && _ui.UiJustPressed;
 
     private Camera _cam;
     private PlayerController _player;
@@ -39,9 +45,6 @@ public class GameManager : MonoBehaviour
     private float _levelTimer;
     private float _pingReadyTime;   // ping cooldown gate
     private int _lastTickSecond;    // for timer audio cues
-    private bool _hintPending;
-    private bool _hintMoved, _hintPinged;
-    private float _hintTimer;
 
     // Moving exit.
     private bool _movingExit;
@@ -58,6 +61,16 @@ public class GameManager : MonoBehaviour
     private float[] _decoyPhase;
     private int _decoyCount;
 
+    // Bonus Echo orb (variable reward) — only visible while the sonar sweep is over it.
+    private SpriteRenderer _orbSR;
+    private Vector2 _orbPos;
+    private bool _orbActive;
+
+    // Daily streak (set once at StartGame).
+    private int _dayStreak;
+    private bool _isDaily;
+    private TutorialController _tutorial;
+
     // Camera fx.
     private Vector3 _camBase;
     private float _baseOrthoSize;
@@ -70,6 +83,8 @@ public class GameManager : MonoBehaviour
     {
         _cam = cam; _player = player; _sonar = sonar; _ui = ui; _audio = audio;
         _wallCtrl = wallCtrl; _fx = fx; _exitSR = exitSR; _vignette = vignette;
+
+        _tutorial = gameObject.AddComponent<TutorialController>();
 
         // Decoy pool.
         var decoyMat = new Material(Shader.Find("EchoMaze/Additive")) { name = "DecoyMat" };
@@ -105,6 +120,16 @@ public class GameManager : MonoBehaviour
             _decoyRingSR[i] = rsr;
         }
 
+        // Bonus Echo orb — a golden reward hidden in a dead-end, findable only by pinging.
+        var orbGO = new GameObject("BonusOrb");
+        orbGO.transform.SetParent(transform, false);
+        _orbSR = orbGO.AddComponent<SpriteRenderer>();
+        _orbSR.sprite = ballSprite;
+        _orbSR.sharedMaterial = decoyMat;
+        _orbSR.color = GameConfig.BonusOrbColor;
+        _orbSR.sortingOrder = 31;
+        orbGO.SetActive(false);
+
         // Exit target ring — a pulsing green marker that makes the destination pop.
         var exitRingGO = new GameObject("ExitRing");
         exitRingGO.transform.SetParent(transform, false);
@@ -115,18 +140,87 @@ public class GameManager : MonoBehaviour
         _exitRingSR.sortingOrder = 29;
     }
 
+    /// <summary>Show the main menu. Nothing runs until the player presses PLAY or DAILY.</summary>
     public void StartGame()
     {
+        SaveData.ApplySettings();
+
+        _ui.OnPlay = BeginEndlessRun;
+        _ui.OnDaily = BeginDailyRun;
+        _ui.OnDailyResultClosed = ReturnToMenu;
+        _ui.OnProgressReset = OnProgressReset;
+
+        ReturnToMenu();
+    }
+
+    /// <summary>
+    /// Progress was wiped from the settings panel. Abandon whatever run is in flight and go back
+    /// to a clean menu — continuing on level 14 with an empty save makes no sense.
+    /// </summary>
+    private void OnProgressReset()
+    {
+        StopAllCoroutines();      // cancel any celebration / fail sequence mid-flight
+        Time.timeScale = 1f;      // ...which may have left time frozen
+        _ui.HideCelebration();
+        _ui.HideNewBest();
+        _ui.SetCover(0f);
+        ReturnToMenu();
+    }
+
+    private void ReturnToMenu()
+    {
+        if (_tutorial != null) _tutorial.Hide();   // never let the tutorial overlay sit on the menu
+        _isDaily = false;
         _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
-        BuildLevel(_level);
+        _dayStreak = SaveData.DayStreak;
+
+        BuildLevel(_level);                 // something alive behind the menu
         State = GameState.Start;
-        _ui.ShowStart(SaveData.BestScore, SaveData.BestStreak);
+        _ui.ShowStart(SaveData.BestScore, SaveData.BestStreak, _dayStreak, SaveData.DailyDone);
+    }
+
+    /// <summary>Normal endless progression.</summary>
+    private void BeginEndlessRun()
+    {
+        _isDaily = false;
+        _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
+        _dayStreak = SaveData.RegisterDailyVisit();   // opening the game counts toward the streak
+
+        BuildLevel(_level);
+        _ui.HideStart();
+        State = _tutorial != null && _tutorial.ShouldRun ? GameState.Tutorial : GameState.Playing;
+        if (State == GameState.Tutorial) _tutorial.Begin(this, _ui, _player);
+    }
+
+    /// <summary>
+    /// The Daily Maze: one fixed layout per day, a single attempt, its own result screen.
+    /// Deliberately a separate mode so the ritual is visible — a daily nobody knows about
+    /// retains nobody.
+    /// </summary>
+    private void BeginDailyRun()
+    {
+        _isDaily = true;
+        _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
+        _dayStreak = SaveData.RegisterDailyVisit();
+
+        BuildLevel(_level);
+        _ui.HideStart();
+        State = GameState.Playing;
+        _ui.ShowBanner("DAILY MAZE", new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
     }
 
     private void BuildLevel(int level)
     {
         _profile = GameConfig.GetDifficulty(level, _failStreak);
-        _maze = MazeGenerator.Generate(_profile.mazeSize, GameConfig.CellSize, Random.Range(1, int.MaxValue));
+
+        // The daily run uses the date seed so every player worldwide gets the same layout today.
+        int seed = _isDaily ? SaveData.DailySeed : Random.Range(1, int.MaxValue);
+        _maze = MazeGenerator.Generate(_profile.mazeSize, GameConfig.CellSize, seed);
+
+        // Per-sector palette: re-tint walls and the ping ring so each chapter reads differently.
+        Color sectorColor = GameConfig.SectorWallColor(level);
+        _wallCtrl.SetGlowColor(sectorColor);
+        _sonar.SetRingColor(sectorColor);
 
         _wallCtrl.Build(_maze);
         _sonar.SetWalls(_maze.walls);
@@ -146,46 +240,95 @@ public class GameManager : MonoBehaviour
         _exitMoveTimer = _profile.exitMoveInterval;
 
         PlaceDecoys(_profile.decoyCount);
+        PlaceBonusOrb();
 
-        _pingsStart = _profile.pings;
-        _pings = _profile.pings;
+        // Daily-streak reward: extra reveals on your first level of the day.
+        int dailyBonus = level == 1 ? Mathf.Min(GameConfig.DailyBonusPingsMax, Mathf.Max(0, _dayStreak - 1)) : 0;
+        _pingsStart = _profile.pings + dailyBonus;
+        _pings = _pingsStart;
         _ui.BuildPingDots(_pingsStart);
         _ui.SetPingsRemaining(_pings);
         _ui.SetLevel(level);
+        _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
+                      GameConfig.LevelsPerSector, sectorColor);
         _ui.SetScoreImmediate(_score);
         _ui.SetStreak(_streak, _streakMul);
+
+        // Announce a new sector as you enter it.
+        if (GameConfig.LevelInSector(level) == 1 && level > 1)
+            _ui.ShowBanner("SECTOR " + (GameConfig.SectorIndex(level) + 1) + "\n" + GameConfig.SectorName(level),
+                           sectorColor, 1.3f);
 
         _levelTimer = _profile.timeLimit;
         _pingReadyTime = 0f;
         _lastTickSecond = int.MaxValue;
         FitCamera(_maze);
 
-        _hintPending = level == 1 && !SaveData.HintSeen;
-        _hintMoved = _hintPinged = false;
-        _hintTimer = 0f;
-        if (_hintPending) { _ui.ShowHint(); RefreshHint(); } else _ui.HideHint();
+        _ui.HideHint(); // onboarding is handled by TutorialController now
     }
 
-    private void UpdateHint()
+    /// <summary>
+    /// Maybe hide a bonus orb in a dead-end. It only appears some of the time (uncertain rewards
+    /// are far more compelling than guaranteed ones) and is invisible until a ping sweeps over it,
+    /// so every ping carries a small "did I find gold?" thrill.
+    /// </summary>
+    private void PlaceBonusOrb()
     {
-        if (!_hintPending) return;
-        _hintTimer += Time.deltaTime;
-        if (!_hintMoved && _player.Moving) { _hintMoved = true; RefreshHint(); }
-        // Dismiss once they've done both, or after a timeout so it never nags forever.
-        if ((_hintMoved && _hintPinged) || _hintTimer > GameConfig.HintMaxSeconds)
+        _orbActive = false;
+        _orbSR.gameObject.SetActive(false);
+
+        var ends = _maze.deadEnds;
+        if (ends == null || ends.Count == 0) return;
+        if (Random.value > GameConfig.BonusOrbChance) return;
+
+        // Prefer a dead-end away from the start so it's a real detour decision.
+        float minDistSqr = (GameConfig.CellSize * 2.5f) * (GameConfig.CellSize * 2.5f);
+        for (int attempt = 0; attempt < 12; attempt++)
         {
-            _hintPending = false;
-            _ui.HideHint();
-            SaveData.MarkHintSeen();
+            var cell = ends[Random.Range(0, ends.Count)];
+            Vector2 pos = _maze.CellCenter(cell.x, cell.y);
+            if ((pos - _maze.startPos).sqrMagnitude < minDistSqr) continue;
+
+            _orbPos = pos;
+            _orbActive = true;
+            _orbSR.transform.position = new Vector3(pos.x, pos.y, 0f);
+            _orbSR.transform.localScale = Vector3.one * (GameConfig.CellSize * 0.5f);
+            _orbSR.color = new Color(GameConfig.BonusOrbColor.r, GameConfig.BonusOrbColor.g, GameConfig.BonusOrbColor.b, 0f);
+            _orbSR.gameObject.SetActive(true);
+            return;
         }
     }
 
-    private void RefreshHint()
+    private void UpdateBonusOrb()
     {
-        if (!_hintPending) return;
-        if (_hintPinged && !_hintMoved) _ui.SetHintText("nice!   now DRAG to reach the exit");
-        else if (_hintMoved && !_hintPinged) _ui.SetHintText("TAP anywhere to ping & reveal walls");
-        else _ui.SetHintText("DRAG to move   •   TAP to ping");
+        if (!_orbActive) return;
+
+        // Lit by the sonar exactly like the walls, with a gentle pulse on top.
+        float reveal = _sonar.RevealAt(_orbPos);
+        float pulse = 0.75f + 0.25f * Mathf.Sin(Time.time * GameConfig.BonusOrbPulseSpeed);
+        var c = GameConfig.BonusOrbColor;
+        c.a = Mathf.Clamp01(reveal * pulse * 1.3f);
+        _orbSR.color = c;
+        _orbSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.45f + 0.15f * reveal));
+
+        // Collect on contact (whether or not it happens to be lit at that instant).
+        Vector2 pp = _player.transform.position;
+        if ((pp - _orbPos).sqrMagnitude < GameConfig.BonusOrbRadius * GameConfig.BonusOrbRadius)
+            CollectBonusOrb();
+    }
+
+    private void CollectBonusOrb()
+    {
+        _orbActive = false;
+        _orbSR.gameObject.SetActive(false);
+
+        _score += GameConfig.BonusOrbScore;
+        _ui.RollScoreTo(_score);
+        _ui.ShowBanner("+" + GameConfig.BonusOrbScore + "  ECHO", GameConfig.BonusOrbColor, 0.5f);
+        _ui.FlashColor(GameConfig.BonusOrbColor, 0.3f);
+        _fx.PlayExitBurst(_orbPos);
+        _audio.PlayStar(2);
+        Haptics.Medium();
     }
 
     private void PlaceDecoys(int count)
@@ -233,13 +376,33 @@ public class GameManager : MonoBehaviour
         _decoyCount = placed;
     }
 
+    /// <summary>Called by the tutorial when both steps are done — hands control back to play.</summary>
+    public void OnTutorialComplete()
+    {
+        if (State == GameState.Tutorial) State = GameState.Playing;
+    }
+
     public void RequestPing()
     {
+        // During the tutorial only the ping STEP may fire one, so the drag lesson can't be skipped.
+        if (State == GameState.Tutorial)
+        {
+            if (_tutorial == null || !_tutorial.PingAllowed) return;
+            if (Time.time < _pingReadyTime || _pings <= 0) return;
+            _pings--;
+            _ui.SetPingsRemaining(_pings);
+            _ui.DarkFlash();
+            _sonar.EmitPing(_player.transform.position);
+            _pingReadyTime = Time.time + GameConfig.PingCooldown;
+            _tutorial.NotifyPinged();
+            return;
+        }
+
         if (State != GameState.Playing) return;
+        if (_ui.SettingsOpen) return;
         if (Time.time < _pingReadyTime) return;  // cooldown: can't spam — wait for the reveal to finish
         if (_pings <= 0) return;                  // out of pings, but you can still move blind
 
-        if (_hintPending && !_hintPinged) { _hintPinged = true; RefreshHint(); }
         _pings--;
         _ui.SetPingsRemaining(_pings);
         _ui.DarkFlash();                 // brief darken so the ring burst reads as powerful
@@ -252,17 +415,20 @@ public class GameManager : MonoBehaviour
         switch (State)
         {
             case GameState.Start:
-                if (EchoInput.PointerDown || EchoInput.PingKeyDown)
-                {
-                    State = GameState.Playing;
-                    _ui.HideStart();
-                }
-                return;
+                return; // menu buttons drive everything from here
 
             case GameState.Celebrating:
                 return; // fully automatic
 
+            case GameState.Tutorial:
+                // The maze is live so the player can practise, but the level timer is paused and
+                // the exit can't be completed until they've learned both controls.
+                UpdateBonusOrb();
+                PulseExit();
+                return;
+
             case GameState.Playing:
+                if (_ui.SettingsOpen) return;   // settings acts as a pause
                 TickPlaying();
                 return;
         }
@@ -286,13 +452,13 @@ public class GameManager : MonoBehaviour
                 _lastTickSecond = secs;
             }
 
-            if (_levelTimer <= 0f) { FailLevel(); return; }
+            if (_levelTimer <= 0f) { StartCoroutine(FailRoutine()); return; }
         }
         else _ui.SetTimer(-1);
 
-        UpdateHint();
         UpdateMovingExit();
         UpdateDecoys();
+        UpdateBonusOrb();
         PulseExit();
 
         if (Vector2.Distance(_player.transform.position, _exitWorld) < GameConfig.CellSize * 0.4f)
@@ -410,7 +576,12 @@ public class GameManager : MonoBehaviour
         if (frac >= GameConfig.Star2PingFrac) stars = 2;
         if (frac >= GameConfig.Star3PingFrac) stars = 3;
 
-        int gained = Mathf.RoundToInt((GameConfig.ScoreBaseClear + _pings * GameConfig.ScorePerPing + timeBonus) * _streakMul);
+        // Clutch: finishing with almost no time left is the most exciting way to win, so it pays.
+        bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
+        bool sectorDone = GameConfig.IsSectorFinale(_level);
+
+        int extras = (clutch ? GameConfig.ClutchBonus : 0) + (sectorDone ? GameConfig.SectorClearBonus : 0);
+        int gained = Mathf.RoundToInt((GameConfig.ScoreBaseClear + _pings * GameConfig.ScorePerPing + timeBonus + extras) * _streakMul);
         int newScore = _score + gained;
 
         bool newBestScore = SaveData.TrySetBestScore(newScore);
@@ -425,6 +596,9 @@ public class GameManager : MonoBehaviour
         _shakeTimer = GameConfig.ShakeDuration;
         _punchTimer = GameConfig.PunchZoomTime;
 
+        // Standout finishes are shown INSIDE the celebration panel (title + score line) rather than
+        // as a floating banner, which used to overlap the panel's own title.
+
         // ---- Hitstop ----
         Time.timeScale = 0f;
         yield return new WaitForSecondsRealtime(GameConfig.HitstopTime);
@@ -432,10 +606,21 @@ public class GameManager : MonoBehaviour
 
         // ---- Celebration panel ----
         _ui.ShowCelebration(_level);
+        if (sectorDone)
+            _ui.SetCelebrationTitle("SECTOR CLEAR\n" + GameConfig.SectorName(_level), GameConfig.SectorWallColor(_level));
+        else if (clutch)
+            _ui.SetCelebrationTitle("CLUTCH CLEAR!", new Color(1f, 0.85f, 0.3f, 1f));
+
         _ui.SetStreak(_streak, _streakMul);
         _score = newScore;
         _ui.RollScoreTo(newScore);
-        _ui.SetCelebrationScoreLine(_streakMul > 1f ? "+" + gained + "   x" + _streakMul.ToString("0.0") : "+" + gained);
+
+        // Score line spells out the bonuses that made up this clear.
+        string line = "+" + gained;
+        if (_streakMul > 1f) line += "   x" + _streakMul.ToString("0.0");
+        if (clutch) line += "\nCLUTCH +" + GameConfig.ClutchBonus;
+        if (sectorDone) line += "\nSECTOR +" + GameConfig.SectorClearBonus;
+        _ui.SetCelebrationScoreLine(line);
 
         // Stars pop in one-by-one with a haptic tap each.
         for (int i = 0; i < stars; i++)
@@ -448,6 +633,18 @@ public class GameManager : MonoBehaviour
 
         if (keptSpare) _audio.PlayStreak(_streak);
         if (newBestScore || newBestStreak) _ui.ShowNewBest();
+
+        // The daily is a single maze, not a run — finish it and show its own result screen.
+        if (_isDaily)
+        {
+            yield return new WaitForSecondsRealtime(GameConfig.CelebrationTime);
+            bool dailyBest = SaveData.CompleteDaily(newScore);
+            _ui.HideCelebration();
+            _ui.HideNewBest();
+            _ui.ShowDailyResult(true, newScore, _dayStreak, dailyBest);
+            State = GameState.Start;   // menu buttons take over again via OnDailyResultClosed
+            yield break;
+        }
 
         // ---- One-more-level: auto-advance behind a quick fade so the swap isn't a hard cut ----
         yield return new WaitForSecondsRealtime(GameConfig.CelebrationTime);
@@ -465,16 +662,48 @@ public class GameManager : MonoBehaviour
         _ui.SetCover(0f);                                   // fade back in on the fresh level
     }
 
-    private void FailLevel()
+    /// <summary>
+    /// Timeout. Rather than cutting straight to a retry, the whole maze lights up and we show how
+    /// close the exit actually was. Seeing "you were 2 tiles away" is what turns a failure into an
+    /// instant retry instead of a quit — a near miss fires the same reward circuitry as a win.
+    /// </summary>
+    private IEnumerator FailRoutine()
     {
+        State = GameState.Celebrating;      // reuse the "cutscene" state: input + ticking are off
+
         _failStreak++;
         _streak = 0; _streakMul = 1f;       // streak breaks on a timer fail
         _ui.SetStreak(0, 1f);
-        _ui.Flash(0.4f);
+        _ui.Flash(0.35f);
         Haptics.Heavy();
         _audio.PlayLose();
-        BuildLevel(_level);                  // rebuild same level (rubber-banding via _failStreak)
+
+        // Light the place up so the player can see the route they missed.
+        Vector2 playerPos = _player.transform.position;
+        _sonar.RevealAll(playerPos, GameConfig.FailRevealTime);
+
+        int tiles = Mathf.Max(1, Mathf.RoundToInt(Vector2.Distance(playerPos, _exitWorld) / GameConfig.CellSize));
+        string line = tiles <= 2 ? "SO CLOSE!\n" + tiles + (tiles == 1 ? " tile away" : " tiles away")
+                                 : "OUT OF TIME\n" + tiles + " tiles away";
+        _ui.ShowBanner(line, new Color(1f, 0.55f, 0.5f, 1f), GameConfig.FailRevealTime * 0.6f);
+
+        yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
+
+        // The daily allows one attempt — running out of time ends it.
+        if (_isDaily)
+        {
+            SaveData.CompleteDaily(_score);
+            _ui.ShowDailyResult(false, _score, _dayStreak, false);
+            State = GameState.Start;
+            yield break;
+        }
+
+        _ui.SetCover(1f);
+        yield return new WaitForSecondsRealtime(0.22f);
+
+        BuildLevel(_level);                 // retry same level (rubber-banding via _failStreak)
         State = GameState.Playing;
+        _ui.SetCover(0f);
     }
 
     private void FitCamera(MazeData maze)

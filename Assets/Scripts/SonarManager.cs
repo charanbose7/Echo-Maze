@@ -42,6 +42,7 @@ public class SonarManager : MonoBehaviour
     private float _lastNearHaptic;
 
     // Per-level tuning (set by GameManager from the Difficulty profile).
+    private Color _ringColor = GameConfig.RingColor;
     private float _fade = GameConfig.FadeStart;
     private float _speed = GameConfig.RingSpeedStart;
     private float _band = GameConfig.BandStart;
@@ -158,11 +159,33 @@ public class SonarManager : MonoBehaviour
         if (p.ticked.Length > 0) Array.Clear(p.ticked, 0, p.ticked.Length);
         _nextSlot = (_nextSlot + 1) % _pings.Length;
 
-        Spawn(_rings, origin, GameConfig.RingColor);
+        Spawn(_rings, origin, _ringColor);
         Spawn(_flashes, origin, Color.white);
 
         if (_audio != null) _audio.PlayPing(1f + UnityEngine.Random.Range(-GameConfig.PingPitchJitter, GameConfig.PingPitchJitter));
         Haptics.Light();
+    }
+
+    /// <summary>Per-sector ring tint.</summary>
+    public void SetRingColor(Color c) => _ringColor = c;
+
+    /// <summary>
+    /// Flood the whole maze with light and hold it — the "you were THIS close" moment on a fail.
+    /// Uses a very fast, very slow-fading sweep; the normal per-level tuning is restored by the
+    /// next ApplyProfile() call when the level rebuilds.
+    /// </summary>
+    public void RevealAll(Vector2 origin, float holdSeconds)
+    {
+        _speed = 60f;
+        _fade = holdSeconds;
+
+        var p = _pings[_nextSlot];
+        p.origin = origin;
+        p.startTime = Time.time;
+        p.active = true;
+        p.tickCount = int.MaxValue; // suppress the cascading tick audio for this sweep
+        if (p.ticked.Length > 0) Array.Clear(p.ticked, 0, p.ticked.Length);
+        _nextSlot = (_nextSlot + 1) % _pings.Length;
     }
 
     private void Update()
@@ -200,7 +223,7 @@ public class SonarManager : MonoBehaviour
             _rings[i].tr.localScale = Vector3.one * (radius * 2f);
             // Bright at birth, easing out -> feels like a shockwave, not a fade.
             float a = 1f - Easing.OutQuad(age / GameConfig.RingLife);
-            var c = GameConfig.RingColor; c.a = 1f;
+            var c = _ringColor; c.a = 1f;
             _rings[i].sr.color = c * (a * 1.4f);
         }
     }

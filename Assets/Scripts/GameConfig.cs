@@ -130,6 +130,41 @@ public static class GameConfig
     public const float ExitNearRadius     = 4.0f;  // brighten the exit as player gets within this
     public const float ExitNearMaxBoost   = 0.55f;
 
+    // ---- Sectors (chapters) ----
+    // Progression needs a big beat every ~10-15 min, not just the per-level one. Levels are grouped
+    // into named sectors that re-tint the whole maze and pay a bonus on completion.
+    public const int   LevelsPerSector    = 5;
+    public const int   SectorClearBonus   = 600;
+    public static readonly string[] SectorNames =
+        { "SHALLOWS", "THE DEEP", "DRIFT", "THE HOLLOW", "ECHO CORE" };
+    public static readonly Color[] SectorWallColors =
+    {
+        new Color(0.55f, 0.80f, 1.00f, 1f), // blue-white
+        new Color(0.45f, 1.00f, 0.85f, 1f), // teal
+        new Color(0.80f, 0.65f, 1.00f, 1f), // violet
+        new Color(1.00f, 0.70f, 0.45f, 1f), // amber
+        new Color(1.00f, 0.45f, 0.55f, 1f), // rose
+    };
+
+    // ---- Bonus Echo orb (the variable reward) ----
+    // Uncertain rewards hit harder than guaranteed ones, so this only appears some of the time and
+    // only the sonar can find it — every ping becomes a small "did I hit gold?" pull.
+    public const float BonusOrbChance     = 0.4f;   // fraction of levels that contain one
+    public const int   BonusOrbScore      = 300;
+    public const float BonusOrbRadius     = 0.34f;  // pickup radius
+    public const float BonusOrbPulseSpeed = 3.2f;
+
+    // ---- Near-miss / clutch ----
+    public const float FailRevealTime     = 1.8f;   // maze lights up on a timeout so you see how close
+    public const float ClutchSeconds      = 3f;     // clearing with less than this left = CLUTCH
+    public const int   ClutchBonus        = 400;
+
+    // ---- Daily streak ----
+    public const int   DailyBonusPingsMax = 3;      // extra pings on your first level of the day
+
+    // ---- Tutorial ----
+    public const float TutorialDragDistance = 1.6f; // world units the player must drag to pass step 1
+
     // ---- Performance ----
     public const int   TargetFrameRate    = 60;
 
@@ -142,6 +177,16 @@ public static class GameConfig
     public static readonly Color DecoyColor      = new Color(1.0f, 0.5f, 0.35f, 1f); // warm = "not the exit"
     public static readonly Color DecoyRingColor  = new Color(1.0f, 0.22f, 0.22f, 1f); // red highlight outline
     public static readonly Color StreakColor     = new Color(1.0f, 0.6f, 0.15f, 1f); // flame
+    public static readonly Color BonusOrbColor   = new Color(1.0f, 0.85f, 0.25f, 1f); // gold reward
+
+    // ---- Sector helpers ----
+    public static int SectorIndex(int level) => Mathf.Max(0, (level - 1) / LevelsPerSector);
+    public static string SectorName(int level) => SectorNames[SectorIndex(level) % SectorNames.Length];
+    public static Color SectorWallColor(int level) => SectorWallColors[SectorIndex(level) % SectorWallColors.Length];
+    /// <summary>True on the last level of a sector (i.e. clearing it completes the sector).</summary>
+    public static bool IsSectorFinale(int level) => level % LevelsPerSector == 0;
+    /// <summary>1-based position within the current sector, for "3/5" style readouts.</summary>
+    public static int LevelInSector(int level) => ((level - 1) % LevelsPerSector) + 1;
 
     /// <summary>
     /// Build the difficulty profile for a given level. <paramref name="failStreak"/> is the

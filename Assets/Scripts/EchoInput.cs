@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -83,6 +85,25 @@ public static class EchoInput
             return (Vector2)Input.mousePosition;
 #endif
         }
+    }
+
+    // Reused so the UI hit test doesn't allocate on every press.
+    private static readonly List<RaycastResult> _uiHits = new List<RaycastResult>();
+
+    /// <summary>
+    /// Is the given screen position over an interactive UI element? Gameplay polls raw pointer
+    /// state, so without this check a tap on a button (CLOSE, the gear, PLAY) also registers as a
+    /// game tap and burns a reveal.
+    /// </summary>
+    public static bool IsOverUI(Vector2 screenPos)
+    {
+        var es = EventSystem.current;
+        if (es == null) return false;
+
+        _uiHits.Clear();
+        var data = new PointerEventData(es) { position = screenPos };
+        es.RaycastAll(data, _uiHits);
+        return _uiHits.Count > 0;
     }
 
     /// <summary>WASD / arrow keys as a normalized direction (zero if untouched).</summary>

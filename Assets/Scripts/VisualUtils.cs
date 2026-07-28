@@ -137,6 +137,89 @@ public static class VisualUtils
         return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
 
+    /// <summary>
+    /// Rounded rectangle for UI buttons/panels, returned as a 9-sliced sprite so it scales to any
+    /// size without distorting the corners. Use with Image.type = Sliced.
+    /// </summary>
+    public static Sprite RoundedRect(int size = 64, int radius = 20)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            // Distance outside the rounded-rect body, measured only in the corner regions.
+            float dx = Mathf.Max(radius - x, x - (size - 1 - radius), 0f);
+            float dy = Mathf.Max(radius - y, y - (size - 1 - radius), 0f);
+            float d = Mathf.Sqrt(dx * dx + dy * dy);
+            float a = Mathf.Clamp01(radius - d + 0.5f);   // 1 inside, soft 1px edge
+            px[y * size + x] = new Color(1f, 1f, 1f, a);
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size,
+                             0, SpriteMeshType.FullRect, new Vector4(radius, radius, radius, radius));
+    }
+
+    /// <summary>
+    /// Hollow rounded-rect OUTLINE, 9-sliced. This is the core of the sonar-HUD button look:
+    /// a bright thin stroke over a dark translucent fill, rather than a flat solid button.
+    /// </summary>
+    public static Sprite RoundedRectOutline(int size = 64, int radius = 20, float thickness = 3.5f)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        float h = size * 0.5f;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            // Signed distance to a rounded box: negative inside, 0 on the edge.
+            float pxc = x + 0.5f - h, pyc = y + 0.5f - h;
+            float qx = Mathf.Abs(pxc) - (h - radius);
+            float qy = Mathf.Abs(pyc) - (h - radius);
+            float outside = Mathf.Sqrt(Mathf.Max(qx, 0f) * Mathf.Max(qx, 0f) + Mathf.Max(qy, 0f) * Mathf.Max(qy, 0f));
+            float sdf = outside + Mathf.Min(Mathf.Max(qx, qy), 0f) - radius;
+
+            float a = Mathf.Clamp01(thickness * 0.5f - Mathf.Abs(sdf) + 0.5f);
+            px[y * size + x] = new Color(1f, 1f, 1f, a);
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size,
+                             0, SpriteMeshType.FullRect, new Vector4(radius, radius, radius, radius));
+    }
+
+    /// <summary>Simple gear glyph for the settings button.</summary>
+    public static Sprite Gear(int size = 96)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        const int teeth = 8;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float dx = x - c, dy = y - c;
+            float r = Mathf.Sqrt(dx * dx + dy * dy) / c;      // 0..1
+            float ang = Mathf.Atan2(dy, dx);
+            // Outer edge wobbles between the tooth tip and root to form the cog.
+            float tooth = Mathf.Cos(ang * teeth);
+            float outer = 0.72f + 0.16f * Mathf.Sign(tooth);
+            float a = (r < outer && r > 0.30f) ? 1f : 0f;      // ring body with a hollow centre
+            a *= Mathf.Clamp01((outer - r) * 12f);             // soften the outer edge
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(a));
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
     /// <summary>Filled 5-point star (for the level-clear star rating).</summary>
     public static Sprite Star(int size = 96)
     {

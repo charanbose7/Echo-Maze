@@ -28,6 +28,7 @@ public class PlayerController : MonoBehaviour
 
     // Drag state.
     private bool _dragging;
+    private bool _gestureOnUI;      // this press began on a UI element -> gameplay ignores it
     private Vector2 _downScreen;
     private float _downTime;
     private Vector2 _fingerPrevWorld;
@@ -67,6 +68,7 @@ public class PlayerController : MonoBehaviour
         _rb.linearVelocity = Vector2.zero;
         _estVel = Vector2.zero;
         _dragging = false;
+        _gestureOnUI = false;
         _pathPos.Clear(); _pathTime.Clear();
 
         if (_trail != null) _trail.Clear();
@@ -79,7 +81,7 @@ public class PlayerController : MonoBehaviour
     {
         if (IsRewinding) { AnimateGlow(); return; }
 
-        if (_gm.State != GameState.Playing)
+        if (!_gm.AcceptsInput)
         {
             _dragging = false;
             _estVel = Vector2.zero;
@@ -105,13 +107,16 @@ public class PlayerController : MonoBehaviour
 
             if (EchoInput.PointerDown)
             {
+                // A press that starts on a button belongs to the UI, not the game — otherwise
+                // tapping CLOSE or the gear would also fire a ping.
+                _gestureOnUI = EchoInput.IsOverUI(EchoInput.PointerScreen);
                 _dragging = false;
                 _downScreen = EchoInput.PointerScreen;
                 _downTime = Time.time;
                 _fingerPrevWorld = ScreenToWorld(_downScreen);
             }
 
-            if (EchoInput.PointerHeld)
+            if (!_gestureOnUI && EchoInput.PointerHeld)
             {
                 Vector2 screen = EchoInput.PointerScreen;
                 if (!_dragging && (screen - _downScreen).magnitude > GameConfig.MoveEngagePx)
@@ -130,8 +135,11 @@ public class PlayerController : MonoBehaviour
 
             if (EchoInput.PointerUp)
             {
-                if (!_dragging) _gm.RequestPing(); // touch that never moved = a ping
+                // Only a genuine gameplay tap pings. Two independent guards: the press didn't start
+                // on a UI element, and no button fired its onClick for this same press.
+                if (!_gestureOnUI && !_dragging && !_gm.UiJustPressed) _gm.RequestPing();
                 _dragging = false;
+                _gestureOnUI = false;
             }
         }
 
