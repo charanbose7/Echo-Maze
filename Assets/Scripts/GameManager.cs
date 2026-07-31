@@ -312,8 +312,7 @@ public class GameManager : MonoBehaviour
         _orbSR.transform.localScale = Vector3.one * (GameConfig.CellSize * (0.45f + 0.15f * reveal));
 
         // Collect on contact (whether or not it happens to be lit at that instant).
-        Vector2 pp = _player.transform.position;
-        if ((pp - _orbPos).sqrMagnitude < GameConfig.BonusOrbRadius * GameConfig.BonusOrbRadius)
+        if (SweptHit(_orbPos, GameConfig.BonusOrbRadius))
             CollectBonusOrb();
     }
 
@@ -461,8 +460,26 @@ public class GameManager : MonoBehaviour
         UpdateBonusOrb();
         PulseExit();
 
-        if (Vector2.Distance(_player.transform.position, _exitWorld) < GameConfig.CellSize * 0.4f)
+        float exitR = GameConfig.CellSize * 0.4f;
+        if (SweptHit(_exitWorld, exitR))
             StartCoroutine(WinRoutine());
+    }
+
+    /// <summary>
+    /// Did the dot pass within <paramref name="radius"/> of <paramref name="target"/> at any point
+    /// this frame? Tests the whole segment travelled, not just where the dot ended up — a fast drag
+    /// applies its finger delta in one go and could otherwise skip clean over the exit.
+    /// </summary>
+    private bool SweptHit(Vector2 target, float radius)
+    {
+        Vector2 a = _player.PrevPosition;
+        Vector2 b = _player.transform.position;
+        Vector2 ab = b - a;
+        float len2 = Vector2.Dot(ab, ab);
+        Vector2 closest = len2 < 1e-8f
+            ? a
+            : a + ab * Mathf.Clamp01(Vector2.Dot(target - a, ab) / len2);
+        return (target - closest).sqrMagnitude < radius * radius;
     }
 
     private void UpdateMovingExit()
@@ -494,8 +511,7 @@ public class GameManager : MonoBehaviour
 
     private void UpdateDecoys()
     {
-        Vector2 pp = _player.transform.position;
-        float hitRadiusSqr = (GameConfig.CellSize * 0.4f) * (GameConfig.CellSize * 0.4f);
+        float hitRadius = GameConfig.CellSize * 0.4f;
 
         for (int i = 0; i < _decoyCount; i++)
         {
@@ -517,9 +533,10 @@ public class GameManager : MonoBehaviour
             var rc = GameConfig.DecoyRingColor; rc.a = Mathf.Clamp01(reveal * 1.25f);
             _decoyRingSR[i].color = rc;
 
-            // Unchanged: only bites while the ball is actually visible.
+            // Unchanged: only bites while the ball is actually visible. Swept like the exit, so
+            // flicking through a lit decoy can't dodge the penalty either.
             if (!blackedOut && vis > GameConfig.DecoyVisibleHit &&
-                (pp - _decoyPos[i]).sqrMagnitude < hitRadiusSqr)
+                SweptHit(_decoyPos[i], hitRadius))
             {
                 HitDecoy(i);
                 return;

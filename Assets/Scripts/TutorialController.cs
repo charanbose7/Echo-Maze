@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 /// <summary>
 /// First-run tutorial, deliberately BLOCKING: playtesters skipped text-only hints entirely and
@@ -23,7 +24,7 @@ public class TutorialController : MonoBehaviour
     private GameObject _root;
     private Image _finger;
     private Image _fingerRipple;
-    private Text _title, _sub;
+    private TMP_Text _title, _sub;
 
     private Step _step = Step.Drag;
     private float _t;
@@ -57,7 +58,8 @@ public class TutorialController : MonoBehaviour
         rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
         rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
 
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var font = TMP_Settings.defaultFontAsset;
+        if (font == null) font = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
 
         // Dim the maze slightly so the instruction reads, without hiding the game.
         var dim = new GameObject("Dim");
@@ -95,15 +97,15 @@ public class TutorialController : MonoBehaviour
         frt.sizeDelta = new Vector2(86, 86);
     }
 
-    private Text MakeText(Font font, string name, Vector2 pos, int size, string content)
+    private TMP_Text MakeText(TMP_FontAsset font, string name, Vector2 pos, int size, string content)
     {
         var go = new GameObject(name);
         go.transform.SetParent(_root.transform, false);
-        var t = go.AddComponent<Text>();
-        t.font = font; t.fontSize = size; t.alignment = TextAnchor.MiddleCenter;
+        var t = go.AddComponent<TextMeshProUGUI>();
+        t.font = font; t.fontSize = size; t.alignment = TextAlignmentOptions.Center;
         t.text = content; t.raycastTarget = false;
-        t.horizontalOverflow = HorizontalWrapMode.Overflow;
-        t.verticalOverflow = VerticalWrapMode.Overflow;
+        t.textWrappingMode = TextWrappingModes.NoWrap;
+        t.overflowMode = TextOverflowModes.Overflow;
         var rt = t.rectTransform;
         rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f); rt.pivot = new Vector2(0.5f, 0.5f);
         rt.anchoredPosition = pos; rt.sizeDelta = new Vector2(1000, 120);

@@ -63,7 +63,34 @@ public class WallShaderController : MonoBehaviour
         // ---- Combined render mesh ----
         _verts.Clear();
         _tris.Clear();
+        // Walls first, then the corner posts. Neither overlaps the other, so the additive sonar
+        // shader can't double-brighten any pixel.
+        AppendQuads(maze.walls);
+        if (maze.posts != null) AppendQuads(maze.posts);
+
+        _mesh.Clear();
+        _mesh.indexFormat = _verts.Count > 65000
+            ? UnityEngine.Rendering.IndexFormat.UInt32
+            : UnityEngine.Rendering.IndexFormat.UInt16;
+        _mesh.SetVertices(_verts);
+        _mesh.SetTriangles(_tris, 0);
+        _mesh.RecalculateBounds();
+
+        // ---- Colliders: walls only. Posts are 0.12 across versus a 0.24-radius player, so they
+        // are geometrically impassable and need no collider of their own.
+        _colliderGO = new GameObject("WallColliders");
+        _colliderGO.transform.SetParent(transform, false);
         foreach (var seg in maze.walls)
+        {
+            var col = _colliderGO.AddComponent<BoxCollider2D>();
+            col.offset = seg.center;
+            col.size = seg.size;
+        }
+    }
+
+    private void AppendQuads(List<WallSegment> segments)
+    {
+        foreach (var seg in segments)
         {
             float hx = seg.size.x * 0.5f;
             float hy = seg.size.y * 0.5f;
@@ -76,23 +103,6 @@ public class WallShaderController : MonoBehaviour
             _verts.Add(new Vector3(cx - hx, cy + hy, 0f));
             _tris.Add(b); _tris.Add(b + 2); _tris.Add(b + 1);
             _tris.Add(b); _tris.Add(b + 3); _tris.Add(b + 2);
-        }
-        _mesh.Clear();
-        _mesh.indexFormat = _verts.Count > 65000
-            ? UnityEngine.Rendering.IndexFormat.UInt32
-            : UnityEngine.Rendering.IndexFormat.UInt16;
-        _mesh.SetVertices(_verts);
-        _mesh.SetTriangles(_tris, 0);
-        _mesh.RecalculateBounds();
-
-        // ---- Colliders: many BoxCollider2D on one static object ----
-        _colliderGO = new GameObject("WallColliders");
-        _colliderGO.transform.SetParent(transform, false);
-        foreach (var seg in maze.walls)
-        {
-            var col = _colliderGO.AddComponent<BoxCollider2D>();
-            col.offset = seg.center;
-            col.size = seg.size;
         }
     }
 }

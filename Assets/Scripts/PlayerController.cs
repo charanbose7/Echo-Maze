@@ -47,6 +47,14 @@ public class PlayerController : MonoBehaviour
     public bool IsRewinding { get; private set; }
     public bool Moving => _estVel.sqrMagnitude > 0.4f;
 
+    /// <summary>
+    /// Where the dot sat at the START of the current frame. Together with its position now this
+    /// gives the segment it travelled, which pickup tests sweep against. A drag applies its finger
+    /// delta directly — there is no speed cap — so a fast flick can cross a whole cell in one
+    /// frame, and a test that only samples the end position misses everything in between.
+    /// </summary>
+    public Vector2 PrevPosition { get; private set; }
+
     public void Init(GameManager gm, SonarManager sonar, Camera cam, Transform glow,
                      FxManager fx, TrailRenderer trail, ProceduralAudio audio)
     {
@@ -65,6 +73,7 @@ public class PlayerController : MonoBehaviour
     {
         _rb.position = worldPos;
         transform.position = new Vector3(worldPos.x, worldPos.y, 0f);
+        PrevPosition = worldPos;   // a respawn must not read as a sweep from the old cell
         _rb.linearVelocity = Vector2.zero;
         _estVel = Vector2.zero;
         _dragging = false;
@@ -79,6 +88,10 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
+        // Stamped before every early-out, so a frame the dot didn't move leaves a zero-length
+        // segment rather than a stale one that sweeps across the maze.
+        PrevPosition = _rb.position;
+
         if (IsRewinding) { AnimateGlow(); return; }
 
         if (!_gm.AcceptsInput)

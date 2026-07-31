@@ -164,33 +164,64 @@ public static class VisualUtils
     }
 
     /// <summary>
-    /// Hollow rounded-rect OUTLINE, 9-sliced. This is the core of the sonar-HUD button look:
-    /// a bright thin stroke over a dark translucent fill, rather than a flat solid button.
+    /// Corner brackets — four L-shaped arms, 9-sliced so the arms keep a constant size at any
+    /// button dimension while the edges between them stay empty. This is the game's button frame:
+    /// a targeting-reticle corner treatment rather than a closed border.
     /// </summary>
-    public static Sprite RoundedRectOutline(int size = 64, int radius = 20, float thickness = 3.5f)
+    public static Sprite CornerBrackets(int size = 64, int arm = 22, float thickness = 4f)
     {
         var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
         var px = new Color[size * size];
-        float h = size * 0.5f;
         for (int y = 0; y < size; y++)
         for (int x = 0; x < size; x++)
         {
-            // Signed distance to a rounded box: negative inside, 0 on the edge.
-            float pxc = x + 0.5f - h, pyc = y + 0.5f - h;
-            float qx = Mathf.Abs(pxc) - (h - radius);
-            float qy = Mathf.Abs(pyc) - (h - radius);
-            float outside = Mathf.Sqrt(Mathf.Max(qx, 0f) * Mathf.Max(qx, 0f) + Mathf.Max(qy, 0f) * Mathf.Max(qy, 0f));
-            float sdf = outside + Mathf.Min(Mathf.Max(qx, qy), 0f) - radius;
-
-            float a = Mathf.Clamp01(thickness * 0.5f - Mathf.Abs(sdf) + 0.5f);
-            px[y * size + x] = new Color(1f, 1f, 1f, a);
+            float dx = Mathf.Min(x, size - 1 - x);   // distance to nearest vertical edge
+            float dy = Mathf.Min(y, size - 1 - y);   // distance to nearest horizontal edge
+            // An arm runs along one edge, but only within `arm` of a corner.
+            bool inArm = (dx < thickness && dy < arm) || (dy < thickness && dx < arm);
+            float a = inArm ? Mathf.Clamp01(Mathf.Min(thickness - Mathf.Min(dx, dy), 1f) + 0.5f) : 0f;
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(a));
         }
         tex.SetPixels(px);
         tex.filterMode = FilterMode.Bilinear;
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.Apply();
         return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size,
-                             0, SpriteMeshType.FullRect, new Vector4(radius, radius, radius, radius));
+                             0, SpriteMeshType.FullRect, new Vector4(arm, arm, arm, arm));
+    }
+
+    /// <summary>
+    /// Checkmark glyph, drawn as two thick strokes. Deliberately NOT the Unicode ✓ — that
+    /// codepoint isn't in Chakra Petch, so TMP falls back to the missing-glyph box.
+    /// </summary>
+    public static Sprite Check(int size = 48, float thickness = 5f)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        var px = new Color[size * size];
+        // Short down-stroke into the elbow, then the long up-stroke (texture y points up).
+        Vector2 a = new Vector2(0.16f, 0.56f) * size;
+        Vector2 b = new Vector2(0.40f, 0.28f) * size;
+        Vector2 c = new Vector2(0.86f, 0.80f) * size;
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            var p = new Vector2(x + 0.5f, y + 0.5f);
+            float d = Mathf.Min(DistToSegment(p, a, b), DistToSegment(p, b, c));
+            float al = Mathf.Clamp01(thickness * 0.5f - d + 0.5f);
+            px[y * size + x] = new Color(1f, 1f, 1f, al);
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
+    private static float DistToSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a;
+        float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / Vector2.Dot(ab, ab));
+        return Vector2.Distance(p, a + ab * t);
     }
 
     /// <summary>Simple gear glyph for the settings button.</summary>
@@ -220,7 +251,41 @@ public static class VisualUtils
         return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
 
-    /// <summary>Filled 5-point star (for the level-clear star rating).</summary>
+    /// <summary>
+    /// Rating marker for the level-clear panel: a four-point sonar "ping" star — a sharp
+    /// concave-sided diamond inside a thin ring. Reads as instrumentation rather than the
+    /// cartoon five-point gold star it replaces, matching the game's sonar-HUD language.
+    /// </summary>
+    public static Sprite PingStar(int size = 128)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        float c = (size - 1) * 0.5f;
+        var px = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float dx = (x - c) / c, dy = (y - c) / c;      // -1..1
+            float ax = Mathf.Abs(dx), ay = Mathf.Abs(dy);
+            float r = Mathf.Sqrt(dx * dx + dy * dy);
+
+            // Four-point star: a diamond whose edges bow inward, giving sharp spikes on the axes.
+            float diamond = ax + ay;                       // 1 on a straight-edged diamond
+            float pinch = 1f - 0.55f * (ax * ay) * 4f;     // pull the edges toward the centre
+            float body = Mathf.Clamp01((pinch - diamond) * 5f + 0.5f);
+
+            // Thin outer ring, like the ping rings in-world.
+            float ring = Mathf.Clamp01(1f - Mathf.Abs(r - 0.93f) / 0.05f);
+
+            px[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(Mathf.Max(body, ring * 0.85f)));
+        }
+        tex.SetPixels(px);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+
+    /// <summary>Filled 5-point star (kept for reference; superseded by PingStar).</summary>
     public static Sprite Star(int size = 96)
     {
         var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);

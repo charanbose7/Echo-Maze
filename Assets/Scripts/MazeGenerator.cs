@@ -15,6 +15,7 @@ public class MazeData
     public int size;
     public float cellSize;
     public List<WallSegment> walls;
+    public List<WallSegment> posts;      // corner fillers — rendered only, no colliders
     public int[,] cells;                 // per-cell wall bitmask (bit set = wall present)
     public List<Vector2Int> deadEnds;    // cells with 3 walls (excl. start & exit)
     public List<Vector2Int> solutionPath;// unique start->exit path (for on-path decoys)
@@ -69,21 +70,54 @@ public static class MazeGenerator
         }
 
         // Wall segments in world space (emit each shared wall once + outer border).
+        //
+        // Walls are exactly (cellSize - thickness) long so they sit strictly BETWEEN the corner
+        // junctions, and each used junction gets a single thickness-sized post. Previously walls
+        // ran cellSize + thickness, so two perpendicular walls overlapped in the corner square —
+        // and because the sonar shader blends additively (One One), that overlap rendered at
+        // double brightness: a visible box at every intersection.
         var walls = new List<WallSegment>();
         float half = cellSize * 0.5f;
         float t = GameConfig.WallThickness;
+        float span = cellSize - t;                       // clear run between two posts
+        var junction = new bool[size + 1, size + 1];     // lattice corner used by >= 1 wall
+
         for (int x = 0; x < size; x++)
         for (int y = 0; y < size; y++)
         {
             Vector2 c = new Vector2(x * cellSize, y * cellSize);
             if ((cells[x, y] & E) != 0)
-                walls.Add(new WallSegment(c + new Vector2(half, 0f), new Vector2(t, cellSize + t)));
+            {
+                walls.Add(new WallSegment(c + new Vector2(half, 0f), new Vector2(t, span)));
+                junction[x + 1, y] = true; junction[x + 1, y + 1] = true;
+            }
             if ((cells[x, y] & N) != 0)
-                walls.Add(new WallSegment(c + new Vector2(0f, half), new Vector2(cellSize + t, t)));
+            {
+                walls.Add(new WallSegment(c + new Vector2(0f, half), new Vector2(span, t)));
+                junction[x, y + 1] = true; junction[x + 1, y + 1] = true;
+            }
             if (x == 0 && (cells[x, y] & W) != 0)
-                walls.Add(new WallSegment(c + new Vector2(-half, 0f), new Vector2(t, cellSize + t)));
+            {
+                walls.Add(new WallSegment(c + new Vector2(-half, 0f), new Vector2(t, span)));
+                junction[0, y] = true; junction[0, y + 1] = true;
+            }
             if (y == 0 && (cells[x, y] & S) != 0)
-                walls.Add(new WallSegment(c + new Vector2(0f, -half), new Vector2(cellSize + t, t)));
+            {
+                walls.Add(new WallSegment(c + new Vector2(0f, -half), new Vector2(span, t)));
+                junction[x, 0] = true; junction[x + 1, 0] = true;
+            }
+        }
+
+        // One post per used junction — fills each corner exactly once, never overlapping.
+        // Visual only: at thickness 0.12 vs a 0.24-radius player these are impassable anyway, so
+        // they get no colliders and are excluded from sonar tick detection.
+        var posts = new List<WallSegment>();
+        for (int i = 0; i <= size; i++)
+        for (int j = 0; j <= size; j++)
+        {
+            if (!junction[i, j]) continue;
+            posts.Add(new WallSegment(new Vector2(i * cellSize - half, j * cellSize - half),
+                                      new Vector2(t, t)));
         }
 
         var exitCell = new Vector2Int(size - 1, size - 1);
@@ -104,6 +138,7 @@ public static class MazeGenerator
             size = size,
             cellSize = cellSize,
             walls = walls,
+            posts = posts,
             cells = cells,
             deadEnds = deadEnds,
             solutionPath = solution,
