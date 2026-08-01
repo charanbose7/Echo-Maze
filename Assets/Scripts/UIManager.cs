@@ -736,7 +736,7 @@ public class UIManager : MonoBehaviour
         // its ping on pointer-UP — the same instant onClick runs — so this timestamp lets the
         // player reliably discard that press. It doesn't depend on UI raycast timing, which makes
         // it a dependable backstop to the IsOverUI() check.
-        btn.onClick.AddListener(() => LastUiPressTime = Time.unscaledTime);
+        btn.onClick.AddListener(() => { LastUiPressTime = Time.unscaledTime; Haptics.Selection(); });
         var colors = btn.colors;
         colors.normalColor = Color.white;
         colors.highlightedColor = new Color(1.25f, 1.25f, 1.25f, 1f);
@@ -961,7 +961,9 @@ public class UIManager : MonoBehaviour
             SaveData.HapticsOn = !SaveData.HapticsOn;
             SaveData.ApplySettings();
             RefreshSettingLabels();
-            if (SaveData.HapticsOn) Haptics.Medium();   // immediate confirmation you can feel
+            // The platform's success pattern rather than a single tap: distinctive enough that
+            // the player can tell "the game buzzed" from "something else on the phone buzzed".
+            if (SaveData.HapticsOn) Haptics.Success();
         });
 
         // Destructive: hidden behind a confirm step so it can't be hit by accident.

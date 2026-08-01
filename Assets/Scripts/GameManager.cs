@@ -446,8 +446,14 @@ public class GameManager : MonoBehaviour
             // Audio cues: one heads-up at 10s, then a rising tick each of the last 5 seconds.
             if (secs != _lastTickSecond)
             {
-                if (secs == GameConfig.TimerWarnAt) _audio.PlayTimeWarning();
-                else if (secs >= 1 && secs <= GameConfig.TimerTickFrom) _audio.PlayCountdownTick(secs);
+                // Haptics mirror the audio: the countdown is the one cue a player must not
+                // miss, and it has to land even with the phone muted in a pocket.
+                if (secs == GameConfig.TimerWarnAt) { _audio.PlayTimeWarning(); Haptics.Medium(); }
+                else if (secs >= 1 && secs <= GameConfig.TimerTickFrom)
+                {
+                    _audio.PlayCountdownTick(secs);
+                    if (secs <= 3) Haptics.Medium(); else Haptics.Light();
+                }
                 _lastTickSecond = secs;
             }
 
@@ -549,7 +555,7 @@ public class GameManager : MonoBehaviour
         // Penalty: freeze time, wipe the reveal, and rewind the dot back its own path.
         // Kept gentle — soft flash, medium haptic, small shake — so it doesn't feel harsh.
         _audio.PlayWrong();                  // collision "thunk" the instant you touch it
-        Haptics.Medium();
+        Haptics.Wrong();                     // the platform's "error" pattern: unmistakably bad
         _ui.FlashColor(new Color(0.4f, 0.8f, 1f, 1f), 0.25f);
         _ui.ShowRewind();
         _ui.PlayRewindEffect();
