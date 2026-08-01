@@ -774,6 +774,26 @@ public class GameManager : MonoBehaviour
         }
     }
 
+#if UNITY_EDITOR
+    /// <summary>
+    /// Editor-only QA hook: drop straight into an arbitrary level so deep progression can be
+    /// tested without playing 80 levels by hand. Compiled out of player builds entirely.
+    /// </summary>
+    public void DebugJumpToLevel(int level)
+    {
+        StopAllCoroutines();
+        Time.timeScale = 1f;
+        _isDaily = false;
+        _failStreak = 0;
+        _level = Mathf.Max(1, level);
+        BuildLevel(_level);
+        _ui.HideStart();
+        _ui.HideCelebration();
+        _ui.SetCover(0f);
+        State = GameState.Playing;
+    }
+#endif
+
     private void OnApplicationPause(bool paused)
     {
         AudioListener.pause = paused; // mute cleanly when backgrounded; timer naturally halts
