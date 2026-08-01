@@ -15,6 +15,7 @@ public struct Difficulty
     public bool movingExit;
     public float exitMoveInterval;
     public int decoyCount;
+    public float decoyFadeSpeed;   // how fast decoys blink — faster is harder to time a crossing
 }
 
 /// <summary>
@@ -136,7 +137,8 @@ public static class GameConfig
     public const int   LevelsPerSector    = 5;
     public const int   SectorClearBonus   = 600;
     public static readonly string[] SectorNames =
-        { "SHALLOWS", "THE DEEP", "DRIFT", "THE HOLLOW", "ECHO CORE" };
+        { "SHALLOWS", "THE DEEP", "DRIFT", "THE HOLLOW", "ECHO CORE",
+          "LONG DARK", "STILLWATER", "THE LATTICE" };
     public static readonly Color[] SectorWallColors =
     {
         new Color(0.55f, 0.80f, 1.00f, 1f), // blue-white
@@ -144,7 +146,29 @@ public static class GameConfig
         new Color(0.80f, 0.65f, 1.00f, 1f), // violet
         new Color(1.00f, 0.70f, 0.45f, 1f), // amber
         new Color(1.00f, 0.45f, 0.55f, 1f), // rose
+        new Color(0.60f, 0.70f, 1.00f, 1f), // indigo
+        new Color(0.70f, 0.95f, 0.80f, 1f), // sea green
+        new Color(0.95f, 0.85f, 0.60f, 1f), // sand
     };
+
+    // ---- Deep progression (past the authored ramp) ----
+    // The run is endless, so difficulty must be too. Levels 1..DeepStartLevel keep the hand-tuned
+    // ramp untouched; past it every knob keeps moving but converges on a floor, so the game gets
+    // relentlessly harder without ever becoming unwinnable.
+    public const int   DeepStartLevel     = 13;   // where the authored ramp tops out
+    // Difficulty deliberately CONVERGES rather than rising forever — past this ramp every knob has
+    // reached its floor and the run stays hard-but-winnable indefinitely. Escalating without limit
+    // would just produce an unwinnable wall. What stays endless is the run itself: fresh mazes,
+    // climbing level count, and sector names that keep advancing (SHALLOWS -> SHALLOWS II -> ...).
+    public const float DeepRampLevels     = 60f;  // levels taken to reach full deep pressure
+    public const int   DeepMaxMazeSize    = 16;   // hard cap: past this, cells are too small to read
+    public const int   DeepSizeStep       = 8;    // +1 grid row every N levels in the deep phase
+    public const float SecondsPerExtraRow = 3.5f; // bigger grids buy time so they stay fair...
+    public const float DeepTimeSqueeze    = 0.72f;// ...and the deep ramp claws it back
+    public const float DeepPingSqueeze    = 0.78f;
+    public const int   MinPings           = 5;    // never leave the player without a way to look
+    public const float DeepExitInterval   = 1.7f; // moving exit gets twitchier
+    public const float DeepDecoyFade      = 3.0f; // decoys blink faster = harder to time
 
     // ---- Bonus Echo orb (the variable reward) ----
     // Uncertain rewards hit harder than guaranteed ones, so this only appears some of the time and
@@ -181,7 +205,38 @@ public static class GameConfig
 
     // ---- Sector helpers ----
     public static int SectorIndex(int level) => Mathf.Max(0, (level - 1) / LevelsPerSector);
-    public static string SectorName(int level) => SectorNames[SectorIndex(level) % SectorNames.Length];
+
+    /// <summary>
+    /// Sector label. The name list cycles, but each full lap appends a numeral ("SHALLOWS II"),
+    /// so a player 200 levels deep still sees a name they have never seen before rather than
+    /// silently looping back to level 1's.
+    /// </summary>
+    public static string SectorName(int level)
+    {
+        int idx = SectorIndex(level);
+        string name = SectorNames[idx % SectorNames.Length];
+        int lap = idx / SectorNames.Length;
+        return lap == 0 ? name : name + " " + Numeral(lap + 1);
+    }
+
+    /// <summary>Roman numerals for the sector lap; falls back to digits well past any real run.</summary>
+    private static string Numeral(int n)
+    {
+        switch (n)
+        {
+            case 2:  return "II";
+            case 3:  return "III";
+            case 4:  return "IV";
+            case 5:  return "V";
+            case 6:  return "VI";
+            case 7:  return "VII";
+            case 8:  return "VIII";
+            case 9:  return "IX";
+            case 10: return "X";
+            default: return n.ToString();
+        }
+    }
+
     public static Color SectorWallColor(int level) => SectorWallColors[SectorIndex(level) % SectorWallColors.Length];
     /// <summary>True on the last level of a sector (i.e. clearing it completes the sector).</summary>
     public static bool IsSectorFinale(int level) => level % LevelsPerSector == 0;
@@ -196,27 +251,56 @@ public static class GameConfig
     {
         var d = new Difficulty();
 
+        // 0 until the authored ramp is done, then 0..1 across DeepRampLevels. Every deep knob
+        // below is a Lerp on this, so they all converge instead of running away.
+        float deepT = Mathf.Clamp01((level - DeepStartLevel) / DeepRampLevels);
+
+        // ---- Grid ----
         d.mazeSize = Mathf.Clamp(StartMazeSize + (level - 1) / LevelsPerSizeStep,
                                  StartMazeSize, MaxMazeSize);
+        if (level > DeepStartLevel)
+        {
+            // Keeps growing past the authored cap, but far more slowly and to a hard ceiling —
+            // beyond DeepMaxMazeSize the cells are too small to read on a phone.
+            d.mazeSize = Mathf.Min(DeepMaxMazeSize,
+                                   d.mazeSize + (level - DeepStartLevel) / DeepSizeStep);
+        }
 
+        // ---- Reveals ----
         int earlyBonus = Mathf.Max(0, TutorialPingBonus - (level - 1));
         int rubber = failStreak >= RubberBandFails ? RubberBandPings : 0;
         d.pings = d.mazeSize + earlyBonus + rubber;
+        if (level > DeepStartLevel)
+        {
+            // Squeezed relative to grid size, so a bigger maze does NOT hand out proportionally
+            // more sight — the deeper you go, the less of the maze one run can afford to light up.
+            d.pings = Mathf.Max(MinPings, Mathf.RoundToInt(d.pings * Mathf.Lerp(1f, DeepPingSqueeze, deepT)));
+        }
 
-        // 0 at level 1, 1 at the top of the ramp.
+        // 0 at level 1, 1 at the top of the authored ramp.
         float ramp = Mathf.Clamp01((level - 1) / FadeRampLevels);
         d.fade      = Mathf.Lerp(FadeStart, FadeEnd, ramp);
         d.ringSpeed = Mathf.Lerp(RingSpeedStart, RingSpeedEnd, ramp);
         d.band      = Mathf.Lerp(BandStart, BandEnd, ramp);
 
+        // ---- Clock ----
         d.timeLimit = LevelTimeLimit;
+        if (level > DeepStartLevel)
+        {
+            // Extra grid rows buy seconds (a 16x16 in 45s would be unwinnable, not hard), and the
+            // deep ramp then takes a cut back off the top.
+            float sizeBonus = (d.mazeSize - MaxMazeSize) * SecondsPerExtraRow;
+            d.timeLimit = (LevelTimeLimit + sizeBonus) * Mathf.Lerp(1f, DeepTimeSqueeze, deepT);
+        }
 
+        // ---- Twists ----
         d.movingExit = level >= MovingExitLevel;
-        d.exitMoveInterval = ExitMoveInterval;
+        d.exitMoveInterval = Mathf.Lerp(ExitMoveInterval, DeepExitInterval, deepT);
 
         d.decoyCount = level >= DecoyStartLevel
             ? Mathf.Min(MaxDecoys, 1 + (level - DecoyStartLevel) / DecoyEveryLevels)
             : 0;
+        d.decoyFadeSpeed = Mathf.Lerp(DecoyFadeSpeed, DeepDecoyFade, deepT);
 
         return d;
     }

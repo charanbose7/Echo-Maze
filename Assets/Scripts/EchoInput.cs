@@ -87,8 +87,11 @@ public static class EchoInput
         }
     }
 
-    // Reused so the UI hit test doesn't allocate on every press.
+    // Both reused so the UI hit test allocates nothing on a press. PointerEventData is a class,
+    // so building a fresh one per tap was a small but entirely avoidable GC drip.
     private static readonly List<RaycastResult> _uiHits = new List<RaycastResult>();
+    private static PointerEventData _uiPointer;
+    private static EventSystem _uiPointerOwner;   // rebuild the cached pointer if the system changes
 
     /// <summary>
     /// Is the given screen position over an interactive UI element? Gameplay polls raw pointer
@@ -100,9 +103,17 @@ public static class EchoInput
         var es = EventSystem.current;
         if (es == null) return false;
 
+        // PointerEventData caches the EventSystem it was built against, so only rebuild it if that
+        // system is actually replaced (it isn't, in practice — this just prevents a stale ref).
+        if (_uiPointer == null || _uiPointerOwner != es)
+        {
+            _uiPointer = new PointerEventData(es);
+            _uiPointerOwner = es;
+        }
+
         _uiHits.Clear();
-        var data = new PointerEventData(es) { position = screenPos };
-        es.RaycastAll(data, _uiHits);
+        _uiPointer.position = screenPos;
+        es.RaycastAll(_uiPointer, _uiHits);
         return _uiHits.Count > 0;
     }
 

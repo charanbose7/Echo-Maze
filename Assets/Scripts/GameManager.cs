@@ -526,7 +526,7 @@ public class GameManager : MonoBehaviour
 
             // Pulsing orange ball (the hazard): fades in and out on its own phase — slip through
             // the cell while it's dark, and it only bites while it's visible.
-            float wave = Mathf.Sin(Time.time * GameConfig.DecoyFadeSpeed + _decoyPhase[i]);
+            float wave = Mathf.Sin(Time.time * _profile.decoyFadeSpeed + _decoyPhase[i]);
             float vis = Mathf.Clamp01(wave); vis *= vis;
             float alpha = blackedOut ? 0f : vis * GameConfig.DecoyMaxAlpha;
             var c = GameConfig.DecoyColor; c.a = alpha;
@@ -609,7 +609,7 @@ public class GameManager : MonoBehaviour
 
         bool newBestScore = SaveData.TrySetBestScore(newScore);
         bool newBestStreak = SaveData.TrySetBestStreak(_streak);
-        SaveData.TrySetStars(_level, stars);
+        if (newBestScore || newBestStreak) SaveData.Flush();   // one disk write, only when needed
 
         // ---- Immediate impact ----
         _audio.PlayWin();

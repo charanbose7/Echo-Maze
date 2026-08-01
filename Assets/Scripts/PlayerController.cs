@@ -64,8 +64,7 @@ public class PlayerController : MonoBehaviour
         _glowScale = _glowBase;
         if (_glow != null) _glow.localScale = _glowBase;
 
-        _castFilter = new ContactFilter2D();
-        _castFilter.NoFilter();
+        _castFilter = ContactFilter2D.noFilter;
         _castFilter.useTriggers = false;
     }
 

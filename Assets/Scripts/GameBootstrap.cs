@@ -28,7 +28,7 @@ public class GameBootstrap : MonoBehaviour
         // directly (EchoInput), which needs no EventSystem — so without this, menu/settings
         // buttons are completely dead. The project runs the new Input System only
         // (activeInputHandler = 1), so it must be InputSystemUIInputModule, not the legacy one.
-        if (Object.FindFirstObjectByType<EventSystem>() == null)
+        if (Object.FindAnyObjectByType<EventSystem>() == null)
         {
             var esGO = new GameObject("EventSystem");
             esGO.AddComponent<EventSystem>();

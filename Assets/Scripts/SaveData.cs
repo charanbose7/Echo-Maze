@@ -10,7 +10,6 @@ public static class SaveData
     private const string KBestScore  = "em_best_score";
     private const string KBestStreak = "em_best_streak";
     private const string KHintSeen   = "em_hint_seen";
-    private const string KStarPrefix = "em_stars_"; // + level
     private const string KDayStreak  = "em_day_streak";
     private const string KLastDay    = "em_last_day";   // UTC day number of the last session
     private const string KBestDay    = "em_best_day_streak";
@@ -22,34 +21,27 @@ public static class SaveData
     public static int BestScore => PlayerPrefs.GetInt(KBestScore, 0);
     public static int BestStreak => PlayerPrefs.GetInt(KBestStreak, 0);
 
-    /// <summary>Record a score. Returns true if it beat the previous best.</summary>
+    // PlayerPrefs.Save() writes the file synchronously. The level-clear path used to call it
+    // three times in a row, which is three blocking disk writes during the celebration — exactly
+    // when the game should feel smoothest. Setters now only stage the value; Flush() commits once.
+    /// <summary>Record a score. Returns true if it beat the previous best. Call Flush() after.</summary>
     public static bool TrySetBestScore(int score)
     {
         if (score <= BestScore) return false;
         PlayerPrefs.SetInt(KBestScore, score);
-        PlayerPrefs.Save();
         return true;
     }
 
-    /// <summary>Record a streak length. Returns true if it beat the previous best.</summary>
+    /// <summary>Record a streak length. Returns true if it beat the previous best. Call Flush() after.</summary>
     public static bool TrySetBestStreak(int streak)
     {
         if (streak <= BestStreak) return false;
         PlayerPrefs.SetInt(KBestStreak, streak);
-        PlayerPrefs.Save();
         return true;
     }
 
-    public static int GetStars(int level) => PlayerPrefs.GetInt(KStarPrefix + level, 0);
-
-    /// <summary>Record stars for a level. Returns true if it improved the record.</summary>
-    public static bool TrySetStars(int level, int stars)
-    {
-        if (stars <= GetStars(level)) return false;
-        PlayerPrefs.SetInt(KStarPrefix + level, stars);
-        PlayerPrefs.Save();
-        return true;
-    }
+    /// <summary>Commit staged records to disk. One write instead of several.</summary>
+    public static void Flush() => PlayerPrefs.Save();
 
     // ---- Daily streak ----------------------------------------------------------------
     // "Come back tomorrow" is the strongest retention hook we can add without a backend.
