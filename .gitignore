@@ -105,3 +105,10 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Generated IDE/solution files not covered above
+*.slnx
+
+# Editor scratch output (profiler captures, recorder output)
+/[Cc]apture/
+/ProfilerCaptures/

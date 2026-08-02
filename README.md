@@ -6,6 +6,8 @@
 
 A hyper-casual sonar puzzler for Android and iOS, where the walls are invisible until you ping them — and the light doesn't last.
 
+by [**Vortex Forge Studios**](https://github.com/VortexForgeStudios)
+
 <img src="docs/media/sonar-sweep.gif" width="300" alt="A sonar ping expanding through a dark maze, revealing walls as it passes" />
 
 [![Unity](https://img.shields.io/badge/Unity-6000.5.2f1-000000?logo=unity)](https://unity.com/)
@@ -42,10 +44,10 @@ Everything else is generated at runtime:
 
 | What | How |
 |---|---|
-| Glows, rings, discs, vignette, gear, stars, UI frames | `Texture2D` written pixel by pixel in [`VisualUtils.cs`](Assets/Scripts/VisualUtils.cs), memoised so identical sprites share one instance |
-| Ping, wall ticks, win arpeggio, countdown, rewind shimmer | Sine synthesis into `AudioClip.Create` in [`ProceduralAudio.cs`](Assets/Scripts/ProceduralAudio.cs) |
-| Mazes | Recursive-backtracker generator producing a perfect maze plus its solution path ([`MazeGenerator.cs`](Assets/Scripts/MazeGenerator.cs)) |
-| Dust, bursts, wall sparks | `ParticleSystem` built from code in [`FxManager.cs`](Assets/Scripts/FxManager.cs) |
+| Glows, rings, discs, vignette, gear, stars, UI frames | `Texture2D` written pixel by pixel in [`VisualUtils.cs`](Assets/Scripts/Utils/VisualUtils.cs), memoised so identical sprites share one instance |
+| Ping, wall ticks, win arpeggio, countdown, rewind shimmer | Sine synthesis into `AudioClip.Create` in [`ProceduralAudio.cs`](Assets/Scripts/Presentation/ProceduralAudio.cs) |
+| Mazes | Recursive-backtracker generator producing a perfect maze plus its solution path ([`MazeGenerator.cs`](Assets/Scripts/Gameplay/MazeGenerator.cs)) |
+| Dust, bursts, wall sparks | `ParticleSystem` built from code in [`FxManager.cs`](Assets/Scripts/Presentation/FxManager.cs) |
 | The entire scene | One `GameBootstrap` component on one empty GameObject — no prefabs |
 
 The scene file contains a single object. Press Play and the game assembles itself.
@@ -154,7 +156,7 @@ Open the project, load `Assets/Scenes/EchoMaze.unity`, press Play.
 
 ## Tuning
 
-Open [`GameConfig.cs`](Assets/Scripts/GameConfig.cs) — three knobs move the game the most:
+Open [`GameConfig.cs`](Assets/Scripts/Core/GameConfig.cs) — three knobs move the game the most:
 
 | Constant | Effect |
 |---|---|
@@ -168,20 +170,41 @@ Open [`GameConfig.cs`](Assets/Scripts/GameConfig.cs) — three knobs move the ga
 
 ```
 Assets/
-├── Scenes/EchoMaze.unity        # one GameObject: GameBootstrap
-├── Scripts/                     # 19 files, ~5.1k lines
-│   ├── GameManager.cs           # level flow, scoring, twists, celebration
-│   ├── UIManager.cs             # entire HUD + menus, built in code
-│   ├── SonarManager.cs          # ping state, pooled FX, tick detection
-│   ├── MazeGenerator.cs         # recursive backtracker + solver
-│   ├── VisualUtils.cs           # every sprite in the game
-│   ├── ProceduralAudio.cs       # every sound in the game
-│   ├── GameConfig.cs            # all tuning + the difficulty curve
-│   └── Editor/                  # Android manifest post-processor
-├── Shaders/                     # SonarWall + Additive
-├── Plugins/iOS/                 # native haptics bridge
-└── Resources/Fonts/             # Orbitron + Chakra Petch (SIL OFL)
+├── Scenes/EchoMaze.unity          # one GameObject: GameBootstrap
+├── Scripts/                       # 19 files, ~5.1k lines
+│   ├── Core/                      # bootstrap, config, game loop, persistence
+│   │   ├── GameBootstrap.cs       #   builds the entire scene at runtime
+│   │   ├── GameConfig.cs          #   all tuning + the difficulty curve
+│   │   ├── GameManager.cs         #   level flow, scoring, twists, celebration
+│   │   └── SaveData.cs            #   PlayerPrefs wrapper
+│   ├── Gameplay/                  # the simulation
+│   │   ├── MazeGenerator.cs       #   recursive backtracker + solver
+│   │   ├── PlayerController.cs    #   drag movement, swept collision, rewind
+│   │   ├── SonarManager.cs        #   ping state, pooled FX, tick detection
+│   │   ├── WallShaderController.cs#   combined wall mesh + colliders
+│   │   └── TutorialController.cs  #   blocking first-run tutorial
+│   ├── Presentation/              # everything the player sees and hears
+│   │   ├── UIManager.cs           #   entire HUD + menus, built in code
+│   │   ├── FxManager.cs           #   particles
+│   │   ├── ProceduralAudio.cs     #   every sound in the game
+│   │   ├── PulseGlow.cs           #   player halo
+│   │   └── SafeArea.cs            #   notch-aware HUD
+│   ├── Platform/                  # device-facing
+│   │   ├── EchoInput.cs           #   input abstraction
+│   │   └── Haptics.cs             #   Android + iOS haptics
+│   ├── Utils/                     # pure helpers
+│   │   ├── VisualUtils.cs         #   every sprite in the game
+│   │   └── Easing.cs
+│   └── Editor/                    # editor-only (excluded from builds)
+│       └── AndroidManifestPostProcessor.cs
+├── Shaders/                       # SonarWall + Additive
+├── Plugins/iOS/                   # native haptics bridge (path is load-bearing)
+├── Resources/Fonts/               # Orbitron + Chakra Petch (loaded by path)
+├── Settings/                      # URP render pipeline assets
+└── Sprites/                       # splash + studio logo (the only image assets)
 ```
+
+> `Resources/`, `Plugins/iOS/` and any folder named `Editor/` are resolved by **path**, not GUID — Unity and the runtime both depend on those exact names, so they don't move.
 
 ---
 
@@ -189,4 +212,11 @@ Assets/
 
 Fonts are **Orbitron** and **Chakra Petch**, both under the [SIL Open Font License 1.1](Assets/Resources/Fonts/LICENSE.txt), which permits embedding and redistribution in commercial products.
 
-Built by **Vortex Forge Studios**.
+<div align="center">
+<br/>
+
+Built by [**Vortex Forge Studios**](https://github.com/VortexForgeStudios)
+
+[![Vortex Forge Studios](https://img.shields.io/badge/GitHub-VortexForgeStudios-181717?logo=github&style=for-the-badge)](https://github.com/VortexForgeStudios)
+
+</div>
