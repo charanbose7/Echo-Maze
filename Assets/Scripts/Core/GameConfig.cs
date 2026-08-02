@@ -94,6 +94,10 @@ public static class GameConfig
     public const float StreakStep         = 0.5f;  // multiplier = 1 + streak*StreakStep
     public const float MaxStreakMultiplier= 6f;
     public const int   StreakMinPingsSpare= 1;     // must finish with >= this many pings to keep streak
+    // A streak is a run of NEAR-PERFECT clears, not just survived ones: finish a level on 2 stars
+    // or fewer and it breaks. Without this the multiplier only ever reset on a timeout, so it
+    // climbed on autopilot and stopped meaning anything.
+    public const int   StreakStarRequirement = 3;
 
     // ---- Stars (fraction of starting pings still in hand at clear) ----
     public const float Star3PingFrac      = 0.5f;

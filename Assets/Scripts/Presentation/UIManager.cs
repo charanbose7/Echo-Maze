@@ -94,6 +94,10 @@ public class UIManager : MonoBehaviour
     private readonly bool[] _starShown = new bool[3];
     private int _streakCount; private float _streakMul; private bool _streakOn;
     private float _newBestT = -1f;
+    private TMP_Text _streakLost;          // "STREAK LOST" callout
+    /// <summary>Resting Y of the streak-lost callout. Clears the score line, which ends at -140.</summary>
+    private const float StreakLostY = -250f;
+    private float _streakLostT = -1f;
     private int _lastTimer = int.MinValue;
     private bool _timerUrgent;
     private float _pingFlashT = -1f;
@@ -235,6 +239,16 @@ public class UIManager : MonoBehaviour
         _newBest = Display(Text_("NewBest", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 470), new Vector2(980, 90), 56, TextAnchor.MiddleCenter, Spaced("NEW BEST!")));
         _newBest.color = new Color(1f, 0.85f, 0.3f, 0f);
         Neon(_newBest, Gold, 0.8f);
+
+        // Losing a streak has to hurt as visibly as gaining one rewards.
+        //
+        // Sits BELOW the celebration's score line, which lives at y -70 and is 140 tall (so it
+        // reaches -140) and can run to three lines on a clutch sector clear: "+2820 x3.0" /
+        // "CLUTCH +400" / "SECTOR +600". At -110 this callout printed straight through it.
+        _streakLost = Display(Text_("StreakLost", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f),
+                              new Vector2(0, StreakLostY), new Vector2(1000, 120), 46, TextAnchor.MiddleCenter, ""));
+        _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
+        Neon(_streakLost, Danger, 0.85f);
 
         _rewindText = Display(Text_("Rewind", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 140), new Vector2(1000, 120), 74, TextAnchor.MiddleCenter, "REWIND  -" + Mathf.RoundToInt(GameConfig.RewindSeconds) + "s"));
         _rewindText.color = new Color(0.5f, 0.85f, 1f, 0f);
@@ -477,7 +491,15 @@ public class UIManager : MonoBehaviour
         _celebOverlay.SetActive(true);
     }
     public void SetCelebrationScoreLine(string line) => _celebScore.text = line;
-    public void HideCelebration() => _celebOverlay.SetActive(false);
+    /// <summary>
+    /// Also clears the streak-lost callout: it lives on the canvas rather than inside the
+    /// celebration overlay, so it would otherwise survive into the next level.
+    /// </summary>
+    public void HideCelebration()
+    {
+        _celebOverlay.SetActive(false);
+        HideStreakLost();
+    }
     public void PopStar(int index) { if (index >= 0 && index < 3) { _starShown[index] = true; _starT[index] = 0f; } }
 
     /// <summary>
@@ -493,6 +515,24 @@ public class UIManager : MonoBehaviour
         _bannerT = 0f;
         if (_bannerBg != null) _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
         if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
+    }
+
+    /// <summary>
+    /// Announce a broken streak. Shows what was lost, so the number that vanishes from the HUD
+    /// is named rather than just silently gone.
+    /// </summary>
+    public void ShowStreakLost(int lostStreak, float lostMultiplier)
+    {
+        if (_streakLost == null) return;
+        _streakLost.text = Spaced("STREAK LOST") + "\n<size=60%>" + lostStreak + " in a row  ·  x"
+                         + lostMultiplier.ToString("0.0") + "  →  x1.0</size>";
+        _streakLostT = 0f;
+    }
+
+    public void HideStreakLost()
+    {
+        _streakLostT = -1f;
+        if (_streakLost != null) _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
     }
 
     public void ShowNewBest() => _newBestT = 0f;
@@ -567,6 +607,23 @@ public class UIManager : MonoBehaviour
             _newBest.transform.localScale = Vector3.one * pop;
             _newBest.color = new Color(1f, 0.85f, 0.3f, alpha);
             if (t > 1.8f) _newBestT = -1f;
+        }
+
+        // STREAK LOST: snaps in oversized, shudders, then sinks away. Deliberately not a gentle
+        // fade — the point is that something was taken.
+        if (_streakLostT >= 0f)
+        {
+            _streakLostT += dt;
+            float t = _streakLostT;
+            float pop = t < 0.22f ? Mathf.Lerp(1.6f, 1f, Easing.OutCubic(t / 0.22f)) : 1f;
+            float shake = t < 0.55f ? Mathf.Sin(t * 46f) * 14f * (1f - t / 0.55f) : 0f;
+            float sink  = t > 1.15f ? (t - 1.15f) * 90f : 0f;
+            float alpha = t < 1.15f ? 1f : Mathf.Clamp01(1f - (t - 1.15f) / 0.55f);
+            _streakLost.rectTransform.anchoredPosition = new Vector2(shake, StreakLostY - sink);
+            _streakLost.transform.localScale = Vector3.one * pop;
+            _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, alpha);
+            NeonColor(_streakLost, Danger, alpha * 0.85f);
+            if (t > 1.7f) { _streakLostT = -1f; }
         }
 
         // Lost-reveal counter flash: red pop settling back to normal.

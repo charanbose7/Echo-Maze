@@ -608,25 +608,37 @@ public class GameManager : MonoBehaviour
 
         // ---- Score + records ----
         int timeBonus = _profile.timeLimit > 0f ? Mathf.RoundToInt(Mathf.Max(0f, _levelTimer) * GameConfig.ScorePerSecond) : 0;
-        bool keptSpare = _pings >= GameConfig.StreakMinPingsSpare;
-        if (keptSpare) _streak++;                    // build the streak (precious!)
-        _streakMul = Mathf.Min(GameConfig.MaxStreakMultiplier, 1f + _streak * GameConfig.StreakStep);
 
+        // Stars first — they now decide the streak, so they have to be known before it is updated.
         float frac = _pingsStart > 0 ? (float)_pings / _pingsStart : 0f;
         int stars = 1;
         if (frac >= GameConfig.Star2PingFrac) stars = 2;
         if (frac >= GameConfig.Star3PingFrac) stars = 3;
+
+        // A streak now means "a run of near-perfect clears". Anything under 3 stars ends it, so the
+        // multiplier is something you can lose by playing sloppily, not just by running out of time.
+        int prevStreak = _streak;
+        float earnedMul = _streakMul;                // the multiplier this clear was played under
+        bool keptSpare = stars >= GameConfig.StreakStarRequirement;
+        if (keptSpare) _streak++;
+        else _streak = 0;
+        _streakMul = Mathf.Min(GameConfig.MaxStreakMultiplier, 1f + _streak * GameConfig.StreakStep);
+
+        // Losing the streak does NOT also void the multiplier on the level you just cleared —
+        // you keep what you had earned up to here, and only the future is reset.
+        bool streakLost = prevStreak > 0 && !keptSpare;
+        float scoreMul = keptSpare ? _streakMul : earnedMul;
 
         // Clutch: finishing with almost no time left is the most exciting way to win, so it pays.
         bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
         bool sectorDone = GameConfig.IsSectorFinale(_level);
 
         int extras = (clutch ? GameConfig.ClutchBonus : 0) + (sectorDone ? GameConfig.SectorClearBonus : 0);
-        int gained = Mathf.RoundToInt((GameConfig.ScoreBaseClear + _pings * GameConfig.ScorePerPing + timeBonus + extras) * _streakMul);
+        int gained = Mathf.RoundToInt((GameConfig.ScoreBaseClear + _pings * GameConfig.ScorePerPing + timeBonus + extras) * scoreMul);
         int newScore = _score + gained;
 
         bool newBestScore = SaveData.TrySetBestScore(newScore);
-        bool newBestStreak = SaveData.TrySetBestStreak(_streak);
+        bool newBestStreak = SaveData.TrySetBestStreak(Mathf.Max(_streak, prevStreak));
         if (newBestScore || newBestStreak) SaveData.Flush();   // one disk write, only when needed
 
         // ---- Immediate impact ----
@@ -662,7 +674,7 @@ public class GameManager : MonoBehaviour
 
         // Score line spells out the bonuses that made up this clear.
         string line = "+" + gained;
-        if (_streakMul > 1f) line += "   x" + _streakMul.ToString("0.0");
+        if (scoreMul > 1f) line += "   x" + scoreMul.ToString("0.0");
         if (clutch) line += "\nCLUTCH +" + GameConfig.ClutchBonus;
         if (sectorDone) line += "\nSECTOR +" + GameConfig.SectorClearBonus;
         _ui.SetCelebrationScoreLine(line);
@@ -677,6 +689,14 @@ public class GameManager : MonoBehaviour
         }
 
         if (keptSpare) _audio.PlayStreak(_streak);
+        else if (streakLost)
+        {
+            // Played after the stars so the player sees WHY it broke, then watches it go.
+            yield return new WaitForSecondsRealtime(0.25f);
+            _ui.ShowStreakLost(prevStreak, earnedMul);
+            _audio.PlayWrong();
+            Haptics.Wrong();
+        }
         if (newBestScore || newBestStreak) _ui.ShowNewBest();
 
         // The daily is a single maze, not a run — finish it and show its own result screen.
