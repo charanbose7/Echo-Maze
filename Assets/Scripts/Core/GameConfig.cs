@@ -45,7 +45,7 @@ public static class GameConfig
 
     // ---- Touch / input (direct finger-drag, frame-rate, collide-and-slide) ----
     public const float MoveEngagePx      = 8f;    // finger travel before the dot starts following (small = responsive)
-    public const float MoveSensitivity   = .5f;  // 1.0 = the dot tracks the finger 1:1 in world space
+    public const float MoveSensitivity   = 1f;  // 1.0 = the dot tracks the finger 1:1 in world space
     public const float PlayerCollideSkin = 0.02f; // gap kept from walls when sliding
     public const float TapMaxDuration    = 0.22f; // quick touch that never engaged movement = a ping
     public const float MoveAudioMaxVol   = 0.16f; // loudest the movement drone gets
