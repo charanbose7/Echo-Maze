@@ -159,6 +159,15 @@ public class GameManager : MonoBehaviour
     /// </summary>
     private void OnProgressReset()
     {
+        // Resetting while still on the tutorial level means the player never really played, so
+        // onboarding restarts: the tutorial replays and the Daily Maze re-locks.
+        //
+        // Getting to level 2 or beyond proves the opposite — they cleared a maze under the clock,
+        // which is exactly what the Daily lock is there to check for. Resetting from there GRANTS
+        // the unlock rather than merely preserving it, so a reset never costs them access.
+        if (_level <= 1 || State == GameState.Tutorial) SaveData.ResetOnboarding();
+        else SaveData.MarkRunFinished();
+
         StopAllCoroutines();      // cancel any celebration / fail sequence mid-flight
         Time.timeScale = 1f;      // ...which may have left time frozen
         _ui.HideCelebration();
@@ -176,7 +185,8 @@ public class GameManager : MonoBehaviour
 
         BuildLevel(_level);                 // something alive behind the menu
         State = GameState.Start;
-        _ui.ShowStart(SaveData.BestScore, SaveData.BestStreak, _dayStreak, SaveData.DailyDone);
+        _ui.ShowStart(SaveData.BestScore, SaveData.BestStreak, _dayStreak,
+                      SaveData.DailyDone, SaveData.RunFinished);
     }
 
     /// <summary>Normal endless progression.</summary>
@@ -248,14 +258,20 @@ public class GameManager : MonoBehaviour
         _pings = _pingsStart;
         _ui.BuildPingDots(_pingsStart);
         _ui.SetPingsRemaining(_pings);
-        _ui.SetLevel(level);
-        _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
-                      GameConfig.LevelsPerSector, sectorColor);
+        // The Daily is a standalone one-maze challenge, not level 1 of a run, so it gets its
+        // own header instead of borrowing the endless run's level/sector readout.
+        if (_isDaily) _ui.SetDailyHeader();
+        else
+        {
+            _ui.SetLevel(level);
+            _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
+                          GameConfig.LevelsPerSector, sectorColor);
+        }
         _ui.SetScoreImmediate(_score);
         _ui.SetStreak(_streak, _streakMul);
 
         // Announce a new sector as you enter it.
-        if (GameConfig.LevelInSector(level) == 1 && level > 1)
+        if (!_isDaily && GameConfig.LevelInSector(level) == 1 && level > 1)
             _ui.ShowBanner("SECTOR " + (GameConfig.SectorIndex(level) + 1) + "\n" + GameConfig.SectorName(level),
                            sectorColor, 1.3f);
 
@@ -277,7 +293,9 @@ public class GameManager : MonoBehaviour
         _orbActive = false;
         _orbSR.gameObject.SetActive(false);
 
-        var ends = _maze.deadEnds;
+        // Only dead ends reachable without crossing the exit — otherwise the orb sits "behind"
+        // the destination and the level ends the moment you go for it.
+        var ends = _maze.reachableDeadEnds;
         if (ends == null || ends.Count == 0) return;
         if (Random.value > GameConfig.BonusOrbChance) return;
 
@@ -629,7 +647,11 @@ public class GameManager : MonoBehaviour
 
         // ---- Celebration panel ----
         _ui.ShowCelebration(_level);
-        if (sectorDone)
+        // The Daily is one standalone maze, so "LEVEL 1 CLEAR" is meaningless there — and its
+        // title must win over the sector/clutch variants, which belong to the endless run.
+        if (_isDaily)
+            _ui.SetCelebrationTitle("DAILY MAZE\nCLEAR", new Color(1f, 0.85f, 0.4f, 1f));
+        else if (sectorDone)
             _ui.SetCelebrationTitle("SECTOR CLEAR\n" + GameConfig.SectorName(_level), GameConfig.SectorWallColor(_level));
         else if (clutch)
             _ui.SetCelebrationTitle("CLUTCH CLEAR!", new Color(1f, 0.85f, 0.3f, 1f));
@@ -696,6 +718,7 @@ public class GameManager : MonoBehaviour
 
         _failStreak++;
         _streak = 0; _streakMul = 1f;       // streak breaks on a timer fail
+        if (!_isDaily) SaveData.MarkRunFinished();   // first full run unlocks the Daily Maze
         _ui.SetStreak(0, 1f);
         _ui.Flash(0.35f);
         Haptics.Heavy();
@@ -708,6 +731,7 @@ public class GameManager : MonoBehaviour
         int tiles = Mathf.Max(1, Mathf.RoundToInt(Vector2.Distance(playerPos, _exitWorld) / GameConfig.CellSize));
         string line = tiles <= 2 ? "SO CLOSE!\n" + tiles + (tiles == 1 ? " tile away" : " tiles away")
                                  : "OUT OF TIME\n" + tiles + " tiles away";
+        if (!_isDaily) line += "\nRUN OVER  ·  LEVEL " + _level;
         _ui.ShowBanner(line, new Color(1f, 0.55f, 0.5f, 1f), GameConfig.FailRevealTime * 0.6f);
 
         yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
@@ -721,11 +745,13 @@ public class GameManager : MonoBehaviour
             yield break;
         }
 
+        // Running out of time ends the RUN, not just the level. Retrying the same level would make
+        // the streak and the score meaningless — you could grind a single level until it fell.
+        // Harsh, but it is what makes "how deep did you get" worth anything.
         _ui.SetCover(1f);
         yield return new WaitForSecondsRealtime(0.22f);
 
-        BuildLevel(_level);                 // retry same level (rubber-banding via _failStreak)
-        State = GameState.Playing;
+        ReturnToMenu();                     // wipes level/score/streak and shows the menu
         _ui.SetCover(0f);
     }
 

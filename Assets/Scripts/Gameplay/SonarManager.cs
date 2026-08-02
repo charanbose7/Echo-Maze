@@ -190,6 +190,12 @@ public class SonarManager : MonoBehaviour
 
     private void Update()
     {
+        // Nothing here is valid until Init() has built the ping slots and pools. In a build that
+        // always happens first, but an editor domain reload during play wipes these (Ping is a
+        // plain private class, so hot-reload restores the array with null entries) and every
+        // frame then throws. Cheap guard, and it keeps the console honest while iterating.
+        if (_pings[0] == null || _rings == null) return;
+
         PushGlobals();
         UpdateRings();
         UpdateFlashes();

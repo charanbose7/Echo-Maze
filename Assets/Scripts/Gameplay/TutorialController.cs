@@ -39,6 +39,10 @@ public class TutorialController : MonoBehaviour
     {
         _gm = gm; _ui = ui; _player = player;
         _step = Step.Drag; _t = 0f; _dragAccum = 0f;
+        // Must be cleared, not just the step index. This controller survives a progress reset, so
+        // a leftover _pinged from the previous run satisfied the ping gate the instant the drag
+        // step finished — the tutorial jumped straight from "DRAG TO MOVE" to "GO!".
+        _pinged = false;
         _lastPlayerPos = player.transform.position;
         BuildUI();
         _running = true;

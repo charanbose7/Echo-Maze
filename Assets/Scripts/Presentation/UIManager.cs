@@ -75,6 +75,8 @@ public class UIManager : MonoBehaviour
     private TMP_Text _rewindText;
     private float _rewindT = -1f;
     private TMP_Text _bannerText;          // sector intro / orb / near-miss callouts
+    private Image _bannerBg;               // scrim so the banner stays readable over a lit maze
+    private Image _bannerFrame;            // corner brackets, matching the button language
     private float _bannerT = -1f, _bannerHold;
     private Color _bannerColor = Color.white;
     private float _dailyStreakGlow;
@@ -240,8 +242,41 @@ public class UIManager : MonoBehaviour
 
         // Lower-centre: clear of the top HUD, and clear of the celebration panel's title/stars/score
         // (which occupy roughly +260 down to -120).
+        //
+        // The scrim behind it is not decoration. The fail banner fires while RevealAll lights the
+        // ENTIRE maze, so the text was competing with bright wall glow directly behind it and was
+        // unreadable exactly when it matters most.
+        // Sharp-cornered slab, not a rounded card: it is the same shape language as the buttons,
+        // and it is sized to hug the text rather than spanning the screen and burying whatever
+        // sits behind it. Colour is the near-black navy of every other panel.
+        var bannerBgGO = new GameObject("BannerScrim");
+        bannerBgGO.transform.SetParent(_canvas.transform, false);
+        _bannerBg = bannerBgGO.AddComponent<Image>();
+        _bannerBg.raycastTarget = false;
+        _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
+        var bbrt = _bannerBg.rectTransform;
+        bbrt.anchorMin = bbrt.anchorMax = new Vector2(0.5f, 0.5f);
+        bbrt.pivot = new Vector2(0.5f, 0.5f);
+        bbrt.anchoredPosition = new Vector2(0, -270);
+        bbrt.sizeDelta = new Vector2(880, 220);
+
+        // Corner brackets, exactly as on every button — this is what makes it read as part of the
+        // game rather than a grey box dropped on top of it.
+        var bannerFrameGO = new GameObject("BannerFrame");
+        bannerFrameGO.transform.SetParent(_canvas.transform, false);
+        _bannerFrame = bannerFrameGO.AddComponent<Image>();
+        _bannerFrame.sprite = _brackets;
+        _bannerFrame.type = Image.Type.Sliced;
+        _bannerFrame.raycastTarget = false;
+        _bannerFrame.color = new Color(Accent.r, Accent.g, Accent.b, 0f);
+        var bfrt = _bannerFrame.rectTransform;
+        bfrt.anchorMin = bfrt.anchorMax = new Vector2(0.5f, 0.5f);
+        bfrt.pivot = new Vector2(0.5f, 0.5f);
+        bfrt.anchoredPosition = new Vector2(0, -270);
+        bfrt.sizeDelta = new Vector2(896, 236);
+
         _bannerText = Display(Text_("Banner", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f),
-                            new Vector2(0, -270), new Vector2(1040, 190), 58, TextAnchor.MiddleCenter, ""));
+                            new Vector2(0, -270), new Vector2(1040, 250), 54, TextAnchor.MiddleCenter, ""));
         _bannerText.color = new Color(1f, 1f, 1f, 0f);
         Neon(_bannerText, Accent, 0.7f);
 
@@ -253,6 +288,21 @@ public class UIManager : MonoBehaviour
 
     // ---------- public API ----------
     public void SetLevel(int level) => _levelText.text = Spaced("LEVEL " + level);
+
+    /// <summary>
+    /// Header for the Daily Maze. It is a standalone challenge, so it shows the date rather than
+    /// a level number and sector — those belong to the endless run and only confuse the two modes.
+    /// </summary>
+    public void SetDailyHeader()
+    {
+        _levelText.text = Spaced("DAILY MAZE");
+        if (_sectorText != null)
+        {
+            _sectorText.text = System.DateTime.Now.ToString("MMM d").ToUpperInvariant();
+            _sectorText.color = Color.Lerp(Gold, Color.white, 0.35f);
+            NeonColor(_sectorText, Gold, 0.6f);
+        }
+    }
 
     /// <summary>Small sector caption under the level number, e.g. "THE DEEP  ·  3/5".</summary>
     public void SetSector(string sectorName, int levelInSector, int levelsPerSector, Color color)
@@ -333,7 +383,7 @@ public class UIManager : MonoBehaviour
         _streakText.text = _streakOn ? "x" + multiplier.ToString("0.0") : "";
     }
 
-    public void ShowStart(int bestScore, int bestStreak, int dayStreak, bool dailyDone)
+    public void ShowStart(int bestScore, int bestStreak, int dayStreak, bool dailyDone, bool dailyUnlocked)
     {
         _startSub.text = bestScore > 0
             ? "Best  " + bestScore + "        Streak  " + bestStreak
@@ -341,10 +391,23 @@ public class UIManager : MonoBehaviour
 
         // Daily button reflects today's state at a glance, and locks once it's been played —
         // one attempt per day is what makes the daily meaningful.
-        if (dailyDone)
+        if (!dailyUnlocked)
         {
+            // One attempt, no retries, full difficulty — a miserable first experience for someone
+            // who has never fired a ping. It opens up once they've seen a run through to the end.
+            _dailyLabel.text = "LOCKED  ·  PLAY A RUN";
+            _dailyLabel.fontSize = 30;
+            _dailyLabel.color = new Color(0.55f, 0.60f, 0.70f, 0.9f);
+            NeonColor(_dailyLabel, new Color(0.5f, 0.6f, 0.75f, 1f), 0.35f);
+            _dailyLabel.rectTransform.anchoredPosition = Vector2.zero;
+            _dailyCheck.gameObject.SetActive(false);
+            _dailyBtn.interactable = false;
+        }
+        else if (dailyDone)
+        {
+            _dailyLabel.fontSize = 38;
             _dailyLabel.text = "DAILY DONE";
-            _dailyLabel.color = new Color(0.55f, 0.85f, 0.65f, 0.8f);
+            _dailyLabel.color = DailyDoneCol;
             _dailyBtn.interactable = false;
 
             // Shift the text left by half the tick's footprint and hang the tick off its right
@@ -358,6 +421,7 @@ public class UIManager : MonoBehaviour
         }
         else
         {
+            _dailyLabel.fontSize = 38;
             _dailyLabel.text = dayStreak > 1 ? "DAILY MAZE   " + dayStreak + "×" : "DAILY MAZE";
             _dailyLabel.color = new Color(1f, 0.85f, 0.4f, 1f);
             _dailyLabel.rectTransform.anchoredPosition = Vector2.zero;
@@ -385,22 +449,29 @@ public class UIManager : MonoBehaviour
     public void ShowHint() => _hint.SetActive(true);
     public void HideHint() => _hint.SetActive(false);
 
-    /// <summary>Retitle the celebration panel (e.g. "SECTOR CLEAR" on a finale).</summary>
+    /// <summary>
+    /// Retitle the celebration panel (e.g. "SECTOR CLEAR" on a finale).
+    ///
+    /// The big soft glow behind the title stays on the UI palette no matter what is passed in.
+    /// Callers hand this the SECTOR colour, and sector tints include teal and sea-green — piping
+    /// one of those into a full-width panel put a green wash behind the text and made the whole
+    /// celebration look like it belonged to a different game. The tint is allowed on the text
+    /// itself (that reads as identity); the chrome behind it is not.
+    /// </summary>
     public void SetCelebrationTitle(string title, Color color)
     {
         _celebTitle.text = Spaced(title);
-        _celebTitle.color = Color.Lerp(color, Color.white, 0.45f);
+        _celebTitle.color = Color.Lerp(color, Color.white, 0.55f);
         NeonColor(_celebTitle, color, 0.9f);
-        if (_celebGlow != null) _celebGlow.color = new Color(color.r, color.g, color.b, 0.18f);
+        if (_celebGlow != null) _celebGlow.color = new Color(Accent.r, Accent.g, Accent.b, 0.16f);
     }
 
     public void ShowCelebration(int level)
     {
-        var win = new Color(0.4f, 1f, 0.75f, 1f);
         _celebTitle.text = Spaced("LEVEL " + level + " CLEAR");
-        _celebTitle.color = new Color(0.85f, 1f, 0.93f, 1f);
-        NeonColor(_celebTitle, win, 0.85f);
-        if (_celebGlow != null) _celebGlow.color = new Color(win.r, win.g, win.b, 0.16f);
+        _celebTitle.color = TitleText;
+        NeonColor(_celebTitle, Accent, 0.85f);
+        if (_celebGlow != null) _celebGlow.color = new Color(Accent.r, Accent.g, Accent.b, 0.16f);
         _celebScore.text = "";
         for (int i = 0; i < 3; i++) { _starShown[i] = false; _starT[i] = 0f; _stars[i].transform.localScale = Vector3.zero; }
         _celebOverlay.SetActive(true);
@@ -420,6 +491,8 @@ public class UIManager : MonoBehaviour
         NeonColor(_bannerText, color, 0.8f);
         _bannerHold = holdSeconds;
         _bannerT = 0f;
+        if (_bannerBg != null) _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 0f);
+        if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
     }
 
     public void ShowNewBest() => _newBestT = 0f;
@@ -548,6 +621,18 @@ public class UIManager : MonoBehaviour
             float alpha = _bannerT < fadeStart ? 1f : Mathf.Clamp01(1f - (_bannerT - fadeStart) / 0.5f);
             _bannerText.transform.localScale = Vector3.one * pop;
             _bannerText.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, alpha);
+            if (_bannerBg != null)
+            {
+                _bannerBg.transform.localScale = Vector3.one * pop;
+                _bannerBg.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, alpha * PanelScrim.a);
+            }
+            if (_bannerFrame != null)
+            {
+                // Frame picks up the banner's own hue (red on a fail, gold on the Daily), so the
+                // callout is colour-coded the same way the buttons are.
+                _bannerFrame.transform.localScale = Vector3.one * pop;
+                _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, alpha * 0.85f);
+            }
             if (_bannerT > fadeStart + 0.5f) _bannerT = -1f;
         }
 
@@ -654,8 +739,23 @@ public class UIManager : MonoBehaviour
     private static readonly Color Accent   = new Color(0.45f, 0.85f, 1.00f, 1f); // cyan
     private static readonly Color Gold     = new Color(1.00f, 0.82f, 0.35f, 1f);
     private static readonly Color Danger   = new Color(1.00f, 0.42f, 0.42f, 1f);
-    private static readonly Color PanelFill= new Color(0.03f, 0.07f, 0.12f, 0.55f);
     private static readonly Color StarLit  = new Color(0.70f, 0.95f, 1.00f, 1f); // sonar-marker rating
+
+    // Derived tints. Everything the UI draws resolves to one of these — no ad-hoc colours, so a
+    // palette change lands everywhere at once.
+    private static readonly Color TitleText   = new Color(0.90f, 0.97f, 1.00f, 1f);  // near-white, cyan-leaning
+    private static readonly Color OnState     = new Color(0.62f, 0.92f, 1.00f, 1f);  // enabled  = Accent family
+    private static readonly Color OffState    = new Color(1.00f, 0.55f, 0.55f, 1f);  // disabled = Danger family
+    private static readonly Color DailyDoneCol= new Color(0.85f, 0.72f, 0.38f, 0.85f); // spent Daily = muted Gold
+
+    // Panel backgrounds. Blue MUST dominate green — at these brightness levels a desaturated
+    // near-black reads as olive/green to the eye, which is what made the banner panel look wrong.
+    // Keep B roughly 2x G, and keep them opaque enough that whatever is behind can't tint them.
+    private static readonly Color PanelSolid  = new Color(0.014f, 0.022f, 0.052f, 0.975f); // menus, settings
+    private static readonly Color PanelVeil   = new Color(0.014f, 0.022f, 0.052f, 0.86f);  // celebration overlay
+    private static readonly Color PanelScrim  = new Color(0.010f, 0.016f, 0.055f, 0.97f);  // behind banner text
+    private static readonly Color ButtonFill  = new Color(0.030f, 0.052f, 0.125f, 0.50f);  // secondary buttons
+    private static readonly Color CardFill    = new Color(0.055f, 0.082f, 0.180f, 1f);     // settings card
 
     /// <summary>
     /// Real shader-based glow on a TMP label: the SDF material renders the halo, so the glyph
@@ -713,7 +813,7 @@ public class UIManager : MonoBehaviour
         var fill = fillGO.AddComponent<Image>();
         fill.raycastTarget = true;
         fill.color = primary ? new Color(accent.r * 0.22f, accent.g * 0.26f, accent.b * 0.38f, 0.5f)
-                             : new Color(0.04f, 0.07f, 0.11f, 0.5f);
+                             : ButtonFill;
         var frt2 = fill.rectTransform;
         frt2.anchorMin = Vector2.zero; frt2.anchorMax = Vector2.one;
         frt2.offsetMin = Vector2.zero; frt2.offsetMax = Vector2.zero;
@@ -761,7 +861,7 @@ public class UIManager : MonoBehaviour
         var panel = go.AddComponent<Image>();
         // Nearly opaque: lets the starfield hint through without the maze's exit/player glows
         // reading as stray UI blobs behind the buttons.
-        panel.color = new Color(0.01f, 0.015f, 0.03f, 0.975f);
+        panel.color = PanelSolid;
         panel.raycastTarget = true;   // blocks taps leaking into gameplay behind the menu
         var prt = panel.rectTransform; prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = Vector2.zero; prt.offsetMax = Vector2.zero;
         var root = go.transform as RectTransform;
@@ -813,7 +913,7 @@ public class UIManager : MonoBehaviour
         _dailyCheck = checkGO.AddComponent<Image>();
         _dailyCheck.sprite = VisualUtils.Check();
         _dailyCheck.raycastTarget = false;
-        _dailyCheck.color = new Color(0.55f, 0.85f, 0.65f, 0.85f);
+        _dailyCheck.color = DailyDoneCol;
         var crt2 = _dailyCheck.rectTransform;
         crt2.anchorMin = crt2.anchorMax = new Vector2(0.5f, 0.5f); crt2.pivot = new Vector2(0.5f, 0.5f);
         crt2.sizeDelta = new Vector2(34, 34);
@@ -843,7 +943,7 @@ public class UIManager : MonoBehaviour
         var panel = go.AddComponent<Image>();
         // Dark enough that maze glows behind can't sit on top of the headline text, but still
         // translucent so the burst/particles read through.
-        panel.color = new Color(0.01f, 0.02f, 0.04f, 0.78f); panel.raycastTarget = false;
+        panel.color = PanelVeil; panel.raycastTarget = false;
         var prt = panel.rectTransform; prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.offsetMin = Vector2.zero; prt.offsetMax = Vector2.zero;
 
         // Bloom behind the headline so a clear feels like a burst of light, not a text change.
@@ -852,14 +952,14 @@ public class UIManager : MonoBehaviour
         _celebGlow = cGlowGO.AddComponent<Image>();
         _celebGlow.sprite = VisualUtils.RadialGlow();
         _celebGlow.raycastTarget = false;
-        _celebGlow.color = new Color(0.5f, 1f, 0.8f, 0.16f);
+        _celebGlow.color = new Color(Accent.r, Accent.g, Accent.b, 0.16f);
         var cgrt = _celebGlow.rectTransform;
         cgrt.anchorMin = cgrt.anchorMax = new Vector2(0.5f, 0.5f); cgrt.pivot = new Vector2(0.5f, 0.5f);
         cgrt.anchoredPosition = new Vector2(0, 230); cgrt.sizeDelta = new Vector2(1100, 520);
 
         _celebTitle = Display(Text_("CTitle", go.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 260), new Vector2(1040, 160), 68, TextAnchor.MiddleCenter, Spaced("LEVEL CLEAR")));
-        _celebTitle.color = new Color(0.85f, 1f, 0.93f, 1f);
-        Neon(_celebTitle, new Color(0.4f, 1f, 0.75f, 1f), 0.85f);
+        _celebTitle.color = TitleText;
+        Neon(_celebTitle, Accent, 0.85f);
 
         // Warm bloom under the star row.
         var starGlowGO = new GameObject("StarGlow");
@@ -909,9 +1009,9 @@ public class UIManager : MonoBehaviour
     private void RefreshSettingLabels()
     {
         _soundLabel.text = "SOUND        " + (SaveData.SoundOn ? "ON" : "OFF");
-        _soundLabel.color = SaveData.SoundOn ? new Color(0.7f, 1f, 0.8f, 1f) : new Color(1f, 0.6f, 0.6f, 1f);
+        _soundLabel.color = SaveData.SoundOn ? OnState : OffState;
         _hapticsLabel.text = "VIBRATION   " + (SaveData.HapticsOn ? "ON" : "OFF");
-        _hapticsLabel.color = SaveData.HapticsOn ? new Color(0.7f, 1f, 0.8f, 1f) : new Color(1f, 0.6f, 0.6f, 1f);
+        _hapticsLabel.color = SaveData.HapticsOn ? OnState : OffState;
     }
 
     private GameObject BuildSettings()
@@ -932,7 +1032,7 @@ public class UIManager : MonoBehaviour
         var card = cardGO.AddComponent<Image>();
         card.sprite = _roundRect;
         card.type = Image.Type.Sliced;
-        card.color = new Color(0.07f, 0.10f, 0.16f, 1f);
+        card.color = CardFill;
         card.raycastTarget = true;
         var root = card.rectTransform;
         root.anchorMin = root.anchorMax = new Vector2(0.5f, 0.5f);
@@ -1045,7 +1145,9 @@ public class UIManager : MonoBehaviour
         go.transform.SetParent(_canvas.transform, false);
         var dim = go.AddComponent<Image>();
         // Fully opaque: the menu/maze behind must not read through and compete for attention.
-        dim.color = new Color(0.02f, 0.03f, 0.05f, 1f);
+        // Uses the shared panel navy — the old 0.02/0.03/0.05 had blue only 1.7x green, which is
+        // enough to read olive across a whole screen with nothing else to offset it.
+        dim.color = new Color(PanelScrim.r, PanelScrim.g, PanelScrim.b, 1f);
         dim.raycastTarget = true;
         var drt = dim.rectTransform; drt.anchorMin = Vector2.zero; drt.anchorMax = Vector2.one; drt.offsetMin = Vector2.zero; drt.offsetMax = Vector2.zero;
         var root = go.transform as RectTransform;

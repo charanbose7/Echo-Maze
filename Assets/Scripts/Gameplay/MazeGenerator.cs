@@ -18,6 +18,8 @@ public class MazeData
     public List<WallSegment> posts;      // corner fillers — rendered only, no colliders
     public int[,] cells;                 // per-cell wall bitmask (bit set = wall present)
     public List<Vector2Int> deadEnds;    // cells with 3 walls (excl. start & exit)
+    /// <summary>Dead ends reachable WITHOUT crossing the exit — the only safe spots for pickups.</summary>
+    public List<Vector2Int> reachableDeadEnds;
     public List<Vector2Int> solutionPath;// unique start->exit path (for on-path decoys)
     public Vector2 startPos;
     public Vector2 exitPos;
@@ -123,12 +125,23 @@ public static class MazeGenerator
         var exitCell = new Vector2Int(size - 1, size - 1);
 
         // Dead ends (3 walls) that aren't the start or the exit — good spots for decoys.
+        //
+        // A perfect maze has exactly ONE route between any two cells, so a dead end sitting
+        // "behind" the exit can only be reached by passing through the exit cell — and touching
+        // the exit ends the level. Anything placed there is unreachable by construction, so the
+        // reachable set is computed with the exit treated as a wall.
+        var reachable = ReachableAvoiding(cells, size, new Vector2Int(0, 0), exitCell);
+
         var deadEnds = new List<Vector2Int>();
+        var reachableDeadEnds = new List<Vector2Int>();
         for (int x = 0; x < size; x++)
         for (int y = 0; y < size; y++)
         {
             if ((x == 0 && y == 0) || (x == exitCell.x && y == exitCell.y)) continue;
-            if (WallCount(cells[x, y]) == 3) deadEnds.Add(new Vector2Int(x, y));
+            if (WallCount(cells[x, y]) != 3) continue;
+            var c = new Vector2Int(x, y);
+            deadEnds.Add(c);
+            if (reachable[x, y]) reachableDeadEnds.Add(c);
         }
 
         var solution = SolvePath(cells, size, new Vector2Int(0, 0), exitCell);
@@ -141,6 +154,7 @@ public static class MazeGenerator
             posts = posts,
             cells = cells,
             deadEnds = deadEnds,
+            reachableDeadEnds = reachableDeadEnds,
             solutionPath = solution,
             startPos = new Vector2(0f, 0f),
             exitCell = exitCell,
@@ -152,6 +166,41 @@ public static class MazeGenerator
         data.worldHeight = data.worldMax.y - data.worldMin.y;
         data.worldCenter = (data.worldMin + data.worldMax) * 0.5f;
         return data;
+    }
+
+    /// <summary>
+    /// Flood-fill from <paramref name="start"/> treating <paramref name="blocked"/> as impassable.
+    /// Used to find the cells a player can actually visit before the exit ends the level.
+    /// </summary>
+    private static bool[,] ReachableAvoiding(int[,] cells, int size, Vector2Int start, Vector2Int blocked)
+    {
+        var seen = new bool[size, size];
+        if (start == blocked) return seen;
+
+        var q = new Queue<Vector2Int>();
+        seen[start.x, start.y] = true;
+        q.Enqueue(start);
+
+        while (q.Count > 0)
+        {
+            var c = q.Dequeue();
+            TryFlood(cells, seen, q, c, new Vector2Int(c.x, c.y + 1), N, blocked, size);
+            TryFlood(cells, seen, q, c, new Vector2Int(c.x + 1, c.y), E, blocked, size);
+            TryFlood(cells, seen, q, c, new Vector2Int(c.x, c.y - 1), S, blocked, size);
+            TryFlood(cells, seen, q, c, new Vector2Int(c.x - 1, c.y), W, blocked, size);
+        }
+        return seen;
+    }
+
+    private static void TryFlood(int[,] cells, bool[,] seen, Queue<Vector2Int> q,
+                                 Vector2Int from, Vector2Int to, int dirBit, Vector2Int blocked, int size)
+    {
+        if (to.x < 0 || to.y < 0 || to.x >= size || to.y >= size) return;
+        if ((cells[from.x, from.y] & dirBit) != 0) return;   // wall between them
+        if (to == blocked) return;                            // stepping here would end the level
+        if (seen[to.x, to.y]) return;
+        seen[to.x, to.y] = true;
+        q.Enqueue(to);
     }
 
     /// <summary>BFS the (unique) start->exit path through the carved maze.</summary>

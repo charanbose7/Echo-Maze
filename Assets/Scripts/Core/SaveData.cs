@@ -17,6 +17,7 @@ public static class SaveData
     private const string KHaptics    = "em_haptics";
     private const string KDailyDone  = "em_daily_done";   // UTC day number of the last daily clear
     private const string KDailyBest  = "em_daily_best";   // best daily score
+    private const string KRunFinished= "em_run_finished";  // player has completed one endless run
 
     public static int BestScore => PlayerPrefs.GetInt(KBestScore, 0);
     public static int BestStreak => PlayerPrefs.GetInt(KBestStreak, 0);
@@ -93,6 +94,32 @@ public static class SaveData
         return best;
     }
 
+    /// <summary>
+    /// True once the player has played an endless run through to its end (i.e. lost once).
+    /// The Daily Maze stays locked until then: it is a single high-pressure attempt with no
+    /// retries, which is a terrible first experience for someone who has never pinged a wall.
+    /// </summary>
+    public static bool RunFinished => PlayerPrefs.GetInt(KRunFinished, 0) == 1;
+
+    public static void MarkRunFinished()
+    {
+        if (RunFinished) return;
+        PlayerPrefs.SetInt(KRunFinished, 1);
+        PlayerPrefs.Save();
+    }
+
+    /// <summary>
+    /// Wipe onboarding state so the player is treated as brand new: the tutorial replays and the
+    /// Daily Maze re-locks. Used when someone resets progress before they have played past the
+    /// tutorial level — at that point they have learned nothing worth preserving.
+    /// </summary>
+    public static void ResetOnboarding()
+    {
+        PlayerPrefs.SetInt(KHintSeen, 0);
+        PlayerPrefs.SetInt(KRunFinished, 0);
+        PlayerPrefs.Save();
+    }
+
     public static bool HintSeen => PlayerPrefs.GetInt(KHintSeen, 0) == 1;
     public static void MarkHintSeen()
     {
@@ -132,7 +159,7 @@ public static class SaveData
     public static void ResetProgress()
     {
         // Snapshot everything that must survive.
-        bool sound = SoundOn, haptics = HapticsOn, hint = HintSeen;
+        bool sound = SoundOn, haptics = HapticsOn, hint = HintSeen, runDone = RunFinished;
         int bestScore = BestScore, bestStreak = BestStreak;
         int dailyDone = PlayerPrefs.GetInt(KDailyDone, -1);
         int dailyBest = DailyBest;
@@ -142,6 +169,7 @@ public static class SaveData
         PlayerPrefs.SetInt(KSound, sound ? 1 : 0);
         PlayerPrefs.SetInt(KHaptics, haptics ? 1 : 0);
         PlayerPrefs.SetInt(KHintSeen, hint ? 1 : 0);
+        PlayerPrefs.SetInt(KRunFinished, runDone ? 1 : 0);
         PlayerPrefs.SetInt(KBestScore, bestScore);
         PlayerPrefs.SetInt(KBestStreak, bestStreak);
         PlayerPrefs.SetInt(KDailyDone, dailyDone);
