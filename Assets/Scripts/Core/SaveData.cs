@@ -18,6 +18,9 @@ public static class SaveData
     private const string KDailyDone  = "em_daily_done";   // UTC day number of the last daily clear
     private const string KDailyBest  = "em_daily_best";   // best daily score
     private const string KRunFinished= "em_run_finished";  // player has completed one endless run
+    private const string KTaughtOrb  = "em_taught_orb";    // seen the bonus-echo explainer
+    private const string KTaughtDecoy= "em_taught_decoy";  // seen the decoy explainer
+    private const string KTaughtExit = "em_taught_exit";   // seen the moving-exit explainer
 
     public static int BestScore => PlayerPrefs.GetInt(KBestScore, 0);
     public static int BestStreak => PlayerPrefs.GetInt(KBestStreak, 0);
@@ -117,8 +120,30 @@ public static class SaveData
     {
         PlayerPrefs.SetInt(KHintSeen, 0);
         PlayerPrefs.SetInt(KRunFinished, 0);
+        // The mechanic explainers are onboarding too: someone starting over from nothing has
+        // to meet the orb and the decoys again as if for the first time.
+        PlayerPrefs.SetInt(KTaughtOrb, 0);
+        PlayerPrefs.SetInt(KTaughtDecoy, 0);
+        PlayerPrefs.SetInt(KTaughtExit, 0);
         PlayerPrefs.Save();
     }
+
+    // ---- One-time mechanic explainers -------------------------------------------------
+    // Playtesters met the gold orb and the decoys with no idea what either was: the orb was
+    // ignored as decoration and the decoys read as a bug ("something threw me backwards").
+    // Each is explained once, on the first level that actually contains one, and never again.
+
+    /// <summary>Has the bonus-echo explainer been shown?</summary>
+    public static bool TaughtOrb => PlayerPrefs.GetInt(KTaughtOrb, 0) == 1;
+    public static void MarkTaughtOrb() { PlayerPrefs.SetInt(KTaughtOrb, 1); PlayerPrefs.Save(); }
+
+    /// <summary>Has the decoy explainer been shown?</summary>
+    public static bool TaughtDecoy => PlayerPrefs.GetInt(KTaughtDecoy, 0) == 1;
+    public static void MarkTaughtDecoy() { PlayerPrefs.SetInt(KTaughtDecoy, 1); PlayerPrefs.Save(); }
+
+    /// <summary>Has the moving-exit explainer been shown?</summary>
+    public static bool TaughtMovingExit => PlayerPrefs.GetInt(KTaughtExit, 0) == 1;
+    public static void MarkTaughtMovingExit() { PlayerPrefs.SetInt(KTaughtExit, 1); PlayerPrefs.Save(); }
 
     public static bool HintSeen => PlayerPrefs.GetInt(KHintSeen, 0) == 1;
     public static void MarkHintSeen()
@@ -152,7 +177,7 @@ public static class SaveData
     ///
     /// Deliberately PRESERVED:
     ///  - best score / best streak — lifetime achievements the player earned
-    ///  - the tutorial flag        — nobody wants to be re-taught the controls
+    ///  - the tutorial + explainer flags — nobody wants to be re-taught what they already know
     ///  - today's daily completion — otherwise resetting would let you re-farm the daily
     ///  - sound / vibration settings
     /// </summary>
@@ -160,6 +185,7 @@ public static class SaveData
     {
         // Snapshot everything that must survive.
         bool sound = SoundOn, haptics = HapticsOn, hint = HintSeen, runDone = RunFinished;
+        bool taughtOrb = TaughtOrb, taughtDecoy = TaughtDecoy, taughtExit = TaughtMovingExit;
         int bestScore = BestScore, bestStreak = BestStreak;
         int dailyDone = PlayerPrefs.GetInt(KDailyDone, -1);
         int dailyBest = DailyBest;
@@ -170,6 +196,9 @@ public static class SaveData
         PlayerPrefs.SetInt(KHaptics, haptics ? 1 : 0);
         PlayerPrefs.SetInt(KHintSeen, hint ? 1 : 0);
         PlayerPrefs.SetInt(KRunFinished, runDone ? 1 : 0);
+        PlayerPrefs.SetInt(KTaughtOrb, taughtOrb ? 1 : 0);
+        PlayerPrefs.SetInt(KTaughtDecoy, taughtDecoy ? 1 : 0);
+        PlayerPrefs.SetInt(KTaughtExit, taughtExit ? 1 : 0);
         PlayerPrefs.SetInt(KBestScore, bestScore);
         PlayerPrefs.SetInt(KBestStreak, bestStreak);
         PlayerPrefs.SetInt(KDailyDone, dailyDone);

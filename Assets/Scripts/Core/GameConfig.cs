@@ -109,10 +109,17 @@ public static class GameConfig
     public const float HitstopTime        = 0.15f; // freeze on exit reached
 
     // ---- Twists (introduced as you climb) ----
-    public const int   DecoyStartLevel    = 5;
+    // Pulled forward deliberately. Under the old numbers nothing new happened on levels 3, 4, 6
+    // or 7 — the maze just gained a row — and that dead stretch is exactly where playtesters
+    // said the game "got uninteresting". A twist now lands on level 3, and the next opens the
+    // second sector, so no player sits through two identical levels in a row.
+    public const int   DecoyStartLevel    = 3;
     public const int   DecoyEveryLevels   = 4;
     public const int   MaxDecoys          = 3;
-    public const int   MovingExitLevel    = 8;
+    // Level 6, not 5: the sector-1 finale is already the difficulty peak, and stacking a brand
+    // new mechanic on top of the hardest level a new player has seen is how you lose them. It
+    // debuts on the RELIEF level right after instead, where there is room to learn it.
+    public const int   MovingExitLevel    = 6;
     public const float ExitMoveInterval   = 2.6f;
     public const float ExitMoveLerp       = 2.2f;
     public const float DecoyFadeSpeed     = 2.1f;  // fade in/out rate; slower = easier to time a crossing
@@ -241,6 +248,46 @@ public static class GameConfig
         }
     }
 
+    // ---- Difficulty sawtooth ----
+    // Pressure rises across a sector, spikes on its finale, then drops at the start of the next
+    // one — two steps forward, one back — instead of climbing in a single unbroken line.
+    //
+    // A monotone ramp reads as "the same level, slightly worse" and gives the player no moment of
+    // feeling strong. Dropping back after a peak does two things: the opener plays as a reward
+    // (the thing that beat you last level is now easy), and the contrast makes the NEXT climb
+    // legible as a climb. Every trough still sits above the previous trough, so nothing is
+    // actually lost — the trend is up, the shape is a sawtooth.
+    //
+    //   level  1  2  3  4  5 |  6  7  8  9 10 | 11 12 13 14 15
+    //   eff    1  1  2  4  6 |  3  5  7  9 11 |  8 10 12 14 16
+    public const float SectorRelief     = 3f;   // levels of pressure refunded at a sector opener
+    public const float SectorFinaleBump = 1f;   // ...and borrowed back on its finale
+
+    /// <summary>
+    /// The level number the PRESSURE knobs should behave as, once the sawtooth is applied.
+    ///
+    /// Used only for how hard the game reads — fade, ring speed, flash band, twist intensity.
+    /// Structural growth (grid size, ping budget) and the level at which a mechanic first appears
+    /// deliberately keep using the real level: a maze that shrank back, or a decoy that vanished
+    /// for a level after being introduced, would read as the game glitching rather than easing off.
+    /// </summary>
+    public static float EffectiveLevel(int level)
+    {
+        // 0 at a sector opener, 1 on its finale.
+        float s = LevelsPerSector > 1
+            ? (LevelInSector(level) - 1) / (float)(LevelsPerSector - 1)
+            : 1f;
+
+        // The first sector gets no relief. There is nothing behind it to be relieved FROM, and
+        // subtracting three levels of pressure from levels that are already the gentlest in the
+        // game just flattens them into each other — levels 1 and 2 came out bit-for-bit identical,
+        // which is the very sameness this curve exists to break up. Sector 1 keeps its authored
+        // ramp; the sawtooth starts biting once there is a peak to fall from.
+        float relief = SectorIndex(level) == 0 ? 0f : SectorRelief;
+
+        return Mathf.Max(1f, level - relief * (1f - s) + SectorFinaleBump * s);
+    }
+
     public static Color SectorWallColor(int level) => SectorWallColors[SectorIndex(level) % SectorWallColors.Length];
     /// <summary>True on the last level of a sector (i.e. clearing it completes the sector).</summary>
     public static bool IsSectorFinale(int level) => level % LevelsPerSector == 0;
@@ -255,9 +302,13 @@ public static class GameConfig
     {
         var d = new Difficulty();
 
+        // How hard this level should FEEL, after the sector sawtooth. Everything that governs
+        // pressure reads from this; everything structural still reads from `level`.
+        float eff = EffectiveLevel(level);
+
         // 0 until the authored ramp is done, then 0..1 across DeepRampLevels. Every deep knob
         // below is a Lerp on this, so they all converge instead of running away.
-        float deepT = Mathf.Clamp01((level - DeepStartLevel) / DeepRampLevels);
+        float deepT = Mathf.Clamp01((eff - DeepStartLevel) / DeepRampLevels);
 
         // ---- Grid ----
         d.mazeSize = Mathf.Clamp(StartMazeSize + (level - 1) / LevelsPerSizeStep,
@@ -281,8 +332,10 @@ public static class GameConfig
             d.pings = Mathf.Max(MinPings, Mathf.RoundToInt(d.pings * Mathf.Lerp(1f, DeepPingSqueeze, deepT)));
         }
 
-        // 0 at level 1, 1 at the top of the authored ramp.
-        float ramp = Mathf.Clamp01((level - 1) / FadeRampLevels);
+        // 0 at level 1, 1 at the top of the authored ramp. The single biggest lever on how hard
+        // the game feels, so this is where the sawtooth is felt most: walls linger noticeably
+        // longer on a sector opener than they did on the finale the player just survived.
+        float ramp = Mathf.Clamp01((eff - 1f) / FadeRampLevels);
         d.fade      = Mathf.Lerp(FadeStart, FadeEnd, ramp);
         d.ringSpeed = Mathf.Lerp(RingSpeedStart, RingSpeedEnd, ramp);
         d.band      = Mathf.Lerp(BandStart, BandEnd, ramp);
@@ -298,11 +351,15 @@ public static class GameConfig
         }
 
         // ---- Twists ----
+        // Whether a twist EXISTS keys off the real level; how much of it there is follows the
+        // sawtooth. A mechanic that was introduced on level 3 and then quietly disappeared on
+        // level 6 would read as the game breaking, not as it easing off — so the count is only
+        // ever relieved down to one, never to none.
         d.movingExit = level >= MovingExitLevel;
         d.exitMoveInterval = Mathf.Lerp(ExitMoveInterval, DeepExitInterval, deepT);
 
         d.decoyCount = level >= DecoyStartLevel
-            ? Mathf.Min(MaxDecoys, 1 + (level - DecoyStartLevel) / DecoyEveryLevels)
+            ? Mathf.Clamp(1 + Mathf.FloorToInt((eff - DecoyStartLevel) / DecoyEveryLevels), 1, MaxDecoys)
             : 0;
         d.decoyFadeSpeed = Mathf.Lerp(DecoyFadeSpeed, DeepDecoyFade, deepT);
 

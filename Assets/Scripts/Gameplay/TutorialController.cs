@@ -9,12 +9,17 @@ using TMPro;
 ///
 ///   Step 1 — an animated finger mimes a drag; the player must really drag the dot.
 ///   Step 2 — the finger mimes a tap; the player must really fire a ping.
+///   Step 3 — a marker points at the exit and the player has to acknowledge it.
+///
+/// Step 3 exists because the first two teach the controls and nothing else: testers came out of
+/// the old tutorial able to move and ping, were shown "GO!", and had no idea there was anything
+/// to go *to*. Knowing the buttons is not the same as knowing the goal.
 ///
 /// Only ever runs on the very first play (SaveData.HintSeen), and only in the endless run.
 /// </summary>
 public class TutorialController : MonoBehaviour
 {
-    private enum Step { Drag, Ping, Done }
+    private enum Step { Drag, Ping, Goal, Done }
 
     private GameManager _gm;
     private UIManager _ui;
@@ -182,10 +187,31 @@ public class TutorialController : MonoBehaviour
             // GameManager tells us when a ping actually fired.
             if (_pinged)
             {
-                _step = Step.Done;
-                Finish();
+                _step = Step.Goal;
+                Haptics.Light();
+                ShowGoal();
             }
         }
+    }
+
+    /// <summary>
+    /// Last step: stop miming controls and show what they are for. The teach card brings its own
+    /// veil and marker, so this overlay gets out of the way entirely rather than stacking two
+    /// dimmed layers and two titles on top of each other.
+    /// </summary>
+    private void ShowGoal()
+    {
+        _running = false;                            // nothing left to animate here
+        if (_root != null) _root.SetActive(false);
+        if (_ui == null || _gm == null) { Finish(); return; }
+
+        _ui.ShowTeachCard(
+            "FIND THE EXIT",
+            "That marker is the way out.\n\n" +
+            "Ping to remember the walls, then reach it before the clock runs out.",
+            UIManager.Accent, GameConfig.ExitColor,
+            Finish,
+            _gm.GameCamera, _gm.ExitWorldPos, "EXIT");
     }
 
     private bool _pinged;
@@ -205,9 +231,11 @@ public class TutorialController : MonoBehaviour
     private void Finish()
     {
         _running = false;
+        _step = Step.Done;
         SaveData.MarkHintSeen();
         if (_root != null) _root.SetActive(false);
-        if (_ui != null) _ui.ShowBanner("GO!", new Color(0.7f, 1f, 0.85f, 1f), 0.6f);
+        // No "GO!" banner any more: the goal step already told the player where to go, and a
+        // banner on top of that is one more thing between them and the maze.
         if (_gm != null) _gm.OnTutorialComplete();
     }
 }

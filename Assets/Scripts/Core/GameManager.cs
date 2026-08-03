@@ -15,7 +15,8 @@ public class GameManager : MonoBehaviour
     public GameState State { get; private set; } = GameState.Start;
 
     /// <summary>Player may move/ping — true during normal play and while practising in the tutorial.</summary>
-    public bool AcceptsInput => (State == GameState.Playing || State == GameState.Tutorial) && !_ui.SettingsOpen;
+    public bool AcceptsInput => (State == GameState.Playing || State == GameState.Tutorial)
+                                && !_ui.SettingsOpen && !_ui.TeachOpen;
 
     /// <summary>A UI button was just pressed, so this tap must not also count as a gameplay tap.</summary>
     public bool UiJustPressed => _ui != null && _ui.UiJustPressed;
@@ -179,6 +180,7 @@ public class GameManager : MonoBehaviour
     private void ReturnToMenu()
     {
         if (_tutorial != null) _tutorial.Hide();   // never let the tutorial overlay sit on the menu
+        _ui.HideTeachCard();                       // nor an explainer from the run we just left
         _isDaily = false;
         _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
         _dayStreak = SaveData.DayStreak;
@@ -200,6 +202,7 @@ public class GameManager : MonoBehaviour
         _ui.HideStart();
         State = _tutorial != null && _tutorial.ShouldRun ? GameState.Tutorial : GameState.Playing;
         if (State == GameState.Tutorial) _tutorial.Begin(this, _ui, _player);
+        else MaybeTeachLevel();
     }
 
     /// <summary>
@@ -217,6 +220,7 @@ public class GameManager : MonoBehaviour
         _ui.HideStart();
         State = GameState.Playing;
         _ui.ShowBanner("DAILY MAZE", new Color(1f, 0.85f, 0.4f, 1f), 1.0f);
+        MaybeTeachLevel();
     }
 
     private void BuildLevel(int level)
@@ -393,10 +397,74 @@ public class GameManager : MonoBehaviour
         _decoyCount = placed;
     }
 
-    /// <summary>Called by the tutorial when both steps are done — hands control back to play.</summary>
+    /// <summary>Called by the tutorial when every step is done — hands control back to play.</summary>
     public void OnTutorialComplete()
     {
-        if (State == GameState.Tutorial) State = GameState.Playing;
+        if (State != GameState.Tutorial) return;
+        State = GameState.Playing;
+        MaybeTeachLevel();   // level 1 may still have an orb to introduce
+    }
+
+    /// <summary>The exit's current world position — the tutorial points its marker here.</summary>
+    public Vector3 ExitWorldPos { get { return new Vector3(_exitWorld.x, _exitWorld.y, 0f); } }
+
+    /// <summary>The gameplay camera, for UI that has to track a world position on screen.</summary>
+    public Camera GameCamera { get { return _cam; } }
+
+    /// <summary>
+    /// Explain a mechanic the first time the player actually meets one, at the top of the level
+    /// that contains it.
+    ///
+    /// Keyed off what was really placed, not off the level number: the orb only turns up on some
+    /// levels, so "level 5 introduces decoys" would happily fire the orb lesson on a level with
+    /// no orb in it and teach nothing.
+    ///
+    /// At most one card per level. Two stacked modals before a level starts is a wall of text,
+    /// and whatever loses the race will still be there to explain the next time it appears.
+    /// </summary>
+    private void MaybeTeachLevel()
+    {
+        if (State != GameState.Playing) return;
+
+        // Decoys first when both are new: they are the one mechanic that PUNISHES you, and a
+        // player who doesn't understand them reads the rewind as the game malfunctioning.
+        if (_decoyCount > 0 && !SaveData.TaughtDecoy)
+        {
+            SaveData.MarkTaughtDecoy();
+            _ui.ShowTeachCard(
+                "DECOYS",
+                "These pulse in and out along your route.\n\n" +
+                "Touch one while it is <b>solid</b> and you are thrown back " +
+                Mathf.RoundToInt(GameConfig.RewindSeconds) + " seconds.\n\n" +
+                "Wait for it to fade, then slip past.",
+                UIManager.Danger, GameConfig.DecoyColor, null);
+            return;
+        }
+
+        // The moving exit debuts on level 6. Without a word of warning the player pings, commits
+        // to a route, and arrives at an empty cell — which reads as the game cheating.
+        if (_movingExit && !SaveData.TaughtMovingExit)
+        {
+            SaveData.MarkTaughtMovingExit();
+            _ui.ShowTeachCard(
+                "THE EXIT MOVES",
+                "From here the way out drifts between cells.\n\n" +
+                "Don't just remember where it was — watch where it goes.",
+                UIManager.Accent, GameConfig.ExitColor, null,
+                _cam, ExitWorldPos, "EXIT");
+            return;
+        }
+
+        if (_orbActive && !SaveData.TaughtOrb)
+        {
+            SaveData.MarkTaughtOrb();
+            _ui.ShowTeachCard(
+                "BONUS ECHO",
+                "One is hidden in a dead end of this maze.\n\n" +
+                "Only a ping reveals it. Reach it for <b>+" +
+                GameConfig.BonusOrbScore + "</b>.",
+                UIManager.Gold, GameConfig.BonusOrbColor, null);
+        }
     }
 
     public void RequestPing()
@@ -440,12 +508,16 @@ public class GameManager : MonoBehaviour
             case GameState.Tutorial:
                 // The maze is live so the player can practise, but the level timer is paused and
                 // the exit can't be completed until they've learned both controls.
+                if (_ui.TeachOpen) return;      // the goal card is up — nothing moves behind it
                 UpdateBonusOrb();
                 PulseExit();
                 return;
 
             case GameState.Playing:
-                if (_ui.SettingsOpen) return;   // settings acts as a pause
+                // Settings and the explainer card both act as a hard pause. The explainer in
+                // particular MUST stop the clock: it fires at the top of a level, and a player
+                // reading it should not be spending their 45 seconds doing so.
+                if (_ui.SettingsOpen || _ui.TeachOpen) return;
                 TickPlaying();
                 return;
         }
@@ -725,6 +797,7 @@ public class GameManager : MonoBehaviour
         State = GameState.Playing;
 
         _ui.SetCover(0f);                                   // fade back in on the fresh level
+        MaybeTeachLevel();                                  // ...and introduce anything new on it
     }
 
     /// <summary>
@@ -837,6 +910,7 @@ public class GameManager : MonoBehaviour
         _ui.HideCelebration();
         _ui.SetCover(0f);
         State = GameState.Playing;
+        MaybeTeachLevel();   // mirror the real level-entry path, so QA sees what a player sees
     }
 #endif
 

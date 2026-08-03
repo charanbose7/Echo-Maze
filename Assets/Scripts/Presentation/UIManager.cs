@@ -64,6 +64,17 @@ public class UIManager : MonoBehaviour
     private Image _dailyFlame;
     private Image _dailyCheck;
     private GameObject _settingsPanel, _dailyResultPanel, _confirmRow;
+
+    // Teach card — the one blocking explainer, reused by every "you have never seen this" moment.
+    private GameObject _teachPanel, _teachMarker;
+    private RectTransform _teachCard;
+    private Image _teachVeil, _teachFill, _teachFrame, _teachSwatch, _teachRing;
+    private TMP_Text _teachTitle, _teachBody, _teachOkLabel, _teachMarkerLabel;
+    private RectTransform _teachOkRT;
+    private System.Action _onTeachClosed;
+    private Camera _teachCam;
+    private Vector3 _teachWorld;
+    private float _teachT;
     private TMP_Text _soundLabel, _hapticsLabel, _dailyResultText;
     private GameObject _gearInGame;
 
@@ -235,6 +246,7 @@ public class UIManager : MonoBehaviour
         _hint = BuildHint();
         _dailyResultPanel = BuildDailyResult();
         _settingsPanel = BuildSettings();   // built late so it draws above the menu
+        _teachPanel = BuildTeachCard();     // later still — an explainer outranks everything
 
         _newBest = Display(Text_("NewBest", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 470), new Vector2(980, 90), 56, TextAnchor.MiddleCenter, Spaced("NEW BEST!")));
         _newBest.color = new Color(1f, 0.85f, 0.3f, 0f);
@@ -551,6 +563,24 @@ public class UIManager : MonoBehaviour
     {
         float dt = Time.unscaledDeltaTime; // keep the UI alive during hitstop (timeScale=0)
 
+        // Teach card: the marker breathes so the eye is pulled to it, and re-tracks every frame
+        // because the camera is never quite still (shake, punch-zoom, the menu's idle drift).
+        if (TeachOpen)
+        {
+            _teachT += dt;
+            if (_teachMarker.activeSelf)
+            {
+                TrackTeachMarker();
+                float markerPulse = 1f + 0.12f * Mathf.Sin(_teachT * 4.2f);
+                _teachMarker.transform.localScale = Vector3.one * markerPulse;
+                var rc = _teachRing.color;
+                _teachRing.color = new Color(rc.r, rc.g, rc.b, 0.65f + 0.35f * Mathf.Sin(_teachT * 4.2f));
+            }
+            // The card itself eases up on open so it doesn't just blink into existence.
+            float pop = Easing.OutBack(Mathf.Clamp01(_teachT / 0.28f));
+            _teachCard.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, pop);
+        }
+
         // Rolling score.
         if (_scoreShown != _scoreTarget)
         {
@@ -793,9 +823,11 @@ public class UIManager : MonoBehaviour
     // ---------- theme ----------
     // Sonar-HUD look: near-black translucent fills with a bright glowing stroke, so panels read
     // like readouts on the same display the maze is drawn on, not like stock mobile-app buttons.
-    private static readonly Color Accent   = new Color(0.45f, 0.85f, 1.00f, 1f); // cyan
-    private static readonly Color Gold     = new Color(1.00f, 0.82f, 0.35f, 1f);
-    private static readonly Color Danger   = new Color(1.00f, 0.42f, 0.42f, 1f);
+    // The three topic hues are public: callers outside this file (the teach card's subject, for
+    // one) must be able to name a palette entry rather than inventing a Color inline.
+    public  static readonly Color Accent   = new Color(0.45f, 0.85f, 1.00f, 1f); // cyan
+    public  static readonly Color Gold     = new Color(1.00f, 0.82f, 0.35f, 1f);
+    public  static readonly Color Danger   = new Color(1.00f, 0.42f, 0.42f, 1f);
     private static readonly Color StarLit  = new Color(0.70f, 0.95f, 1.00f, 1f); // sonar-marker rating
 
     // Derived tints. Everything the UI draws resolves to one of these — no ad-hoc colours, so a
@@ -1193,6 +1225,250 @@ public class UIManager : MonoBehaviour
     }
 
     public void ShowInGameGear(bool show) { if (_gearInGame != null) _gearInGame.SetActive(show); }
+
+    // ---------- teach card ----------
+
+    /// <summary>
+    /// One blocking explainer, reused by every moment where the player meets something new: the
+    /// tutorial's "here is the exit" step, the first bonus orb, the first decoy.
+    ///
+    /// Blocking on purpose. Every self-dismissing hint we tried — banners, timed captions — was
+    /// read straight past, and players then met the mechanic with no idea what it was ("something
+    /// threw me backwards" was a decoy). This stays up until OK is pressed, and GameManager holds
+    /// the level frozen the whole time.
+    ///
+    /// Two layouts, chosen by whether a world target was supplied:
+    ///   * no target — card centred over a heavy veil. For things that are hidden anyway.
+    ///   * a target  — a marker ring tracks it on screen and the card moves to the OPPOSITE half,
+    ///                 so the explanation and the thing it explains are legible together.
+    /// </summary>
+    private GameObject BuildTeachCard()
+    {
+        var go = new GameObject("TeachCard");
+        go.transform.SetParent(_canvas.transform, false);
+        _teachVeil = go.AddComponent<Image>();
+        _teachVeil.color = PanelVeil;
+        _teachVeil.raycastTarget = true;    // swallows gameplay taps while the card is up
+        var vrt = _teachVeil.rectTransform;
+        vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one;
+        vrt.offsetMin = Vector2.zero; vrt.offsetMax = Vector2.zero;
+        var root = go.transform as RectTransform;
+
+        // ---- the card ----
+        var cardGO = new GameObject("Card");
+        cardGO.transform.SetParent(root, false);
+        _teachCard = cardGO.AddComponent<RectTransform>();
+        _teachCard.anchorMin = _teachCard.anchorMax = new Vector2(0.5f, 0.5f);
+        _teachCard.pivot = new Vector2(0.5f, 0.5f);
+        _teachCard.sizeDelta = new Vector2(900, 560);
+
+        var fillGO = new GameObject("Fill");
+        fillGO.transform.SetParent(_teachCard, false);
+        _teachFill = fillGO.AddComponent<Image>();
+        // CardFill, not PanelSolid: the veil behind this is already near-black, and a card the
+        // same value as its own backdrop reads as loose text with brackets floating around it.
+        _teachFill.color = CardFill;
+        _teachFill.raycastTarget = false;
+        var frt = _teachFill.rectTransform;
+        frt.anchorMin = Vector2.zero; frt.anchorMax = Vector2.one;
+        frt.offsetMin = Vector2.zero; frt.offsetMax = Vector2.zero;
+
+        var frameGO = new GameObject("Frame");
+        frameGO.transform.SetParent(_teachCard, false);
+        _teachFrame = frameGO.AddComponent<Image>();
+        _teachFrame.sprite = _brackets; _teachFrame.type = Image.Type.Sliced;
+        _teachFrame.raycastTarget = false;
+        var xrt = _teachFrame.rectTransform;
+        xrt.anchorMin = Vector2.zero; xrt.anchorMax = Vector2.one;
+        xrt.offsetMin = new Vector2(-10, -10); xrt.offsetMax = new Vector2(10, 10);
+
+        // A literal sample of the thing being described — the one place a gameplay colour is
+        // allowed on UI chrome, because it IS the gameplay object, just held still.
+        var swGO = new GameObject("Swatch");
+        swGO.transform.SetParent(_teachCard, false);
+        _teachSwatch = swGO.AddComponent<Image>();
+        _teachSwatch.sprite = _dotSprite;
+        _teachSwatch.raycastTarget = false;
+        var swrt = _teachSwatch.rectTransform;
+        swrt.anchorMin = swrt.anchorMax = new Vector2(0.5f, 0.5f); swrt.pivot = new Vector2(0.5f, 0.5f);
+        swrt.anchoredPosition = new Vector2(0, 178); swrt.sizeDelta = new Vector2(76, 76);
+
+        _teachTitle = Display(Text_("TeachTitle", _teachCard, new Vector2(0.5f, 0.5f), new Vector2(0, 88),
+                                    new Vector2(860, 80), 54, TextAnchor.MiddleCenter, ""));
+
+        _teachBody = Text_("TeachBody", _teachCard, new Vector2(0.5f, 0.5f), new Vector2(0, -30),
+                           new Vector2(760, 200), 38, TextAnchor.MiddleCenter, "");
+        _teachBody.color = new Color(0.86f, 0.93f, 1f, 0.95f);
+        _teachBody.textWrappingMode = TextWrappingModes.Normal;   // body copy, unlike every readout
+        _teachBody.overflowMode = TextOverflowModes.Overflow;
+
+        var okBtn = Button_("TeachOk", _teachCard, new Vector2(0.5f, 0.5f), Vector2.zero,
+                            new Vector2(400, TeachOkH), Spaced("OK"), 42, Accent, true, out _teachOkLabel);
+        okBtn.onClick.AddListener(CloseTeachCard);
+        _teachOkRT = okBtn.transform as RectTransform;
+
+        // ---- marker: a pulsing reticle over a world object ----
+        // Built AFTER the card so it draws on top of it. The card is placed in the opposite half
+        // of the screen from its target, but on a short maze or a tall card the two can still
+        // meet, and the thing being pointed at must never end up behind the words describing it.
+        _teachMarker = new GameObject("TeachMarker");
+        _teachMarker.transform.SetParent(root, false);
+        var mrt = _teachMarker.AddComponent<RectTransform>();
+        mrt.anchorMin = mrt.anchorMax = new Vector2(0.5f, 0.5f);
+        mrt.pivot = new Vector2(0.5f, 0.5f);
+        mrt.sizeDelta = new Vector2(230, 230);
+
+        var ringGO = new GameObject("Ring");
+        ringGO.transform.SetParent(mrt, false);
+        _teachRing = ringGO.AddComponent<Image>();
+        _teachRing.sprite = VisualUtils.HollowRing();
+        _teachRing.raycastTarget = false;
+        var rrt = _teachRing.rectTransform;
+        rrt.anchorMin = Vector2.zero; rrt.anchorMax = Vector2.one;
+        rrt.offsetMin = Vector2.zero; rrt.offsetMax = Vector2.zero;
+
+        _teachMarkerLabel = Display(Text_("MarkerLabel", mrt, new Vector2(0.5f, 0.5f), new Vector2(0, 150),
+                                          new Vector2(520, 60), 34, TextAnchor.MiddleCenter, ""));
+
+        go.SetActive(false);
+        return go;
+    }
+
+    // Card metrics. Laid out top-down from these rather than hardcoded positions, because the body
+    // is the only variable-height element and a fixed card silently overflowed it into the title
+    // and the OK button the moment the copy ran past three lines.
+    private const float TeachPad    = 46f;
+    private const float TeachWidth  = 900f;
+    private const float TeachBodyW  = 760f;
+    private const float TeachSwatch = 72f;
+    private const float TeachTitleH = 76f;
+    private const float TeachOkH    = 118f;
+    private const float TeachGapS   = 26f;   // swatch -> title
+    private const float TeachGapT   = 24f;   // title  -> body
+    private const float TeachGapB   = 46f;   // body   -> OK
+
+    /// <summary>
+    /// Size the card to its content and stack the children down from the top edge. Returns the
+    /// card's height so the caller can keep it on screen.
+    /// </summary>
+    private float LayoutTeachCard(bool hasSwatch)
+    {
+        _teachBody.ForceMeshUpdate();     // preferredHeight is stale until the mesh is rebuilt
+        float bodyH = Mathf.Max(80f, _teachBody.preferredHeight);
+
+        float cardH = TeachPad
+                    + (hasSwatch ? TeachSwatch + TeachGapS : 0f)
+                    + TeachTitleH + TeachGapT
+                    + bodyH + TeachGapB
+                    + TeachOkH + TeachPad;
+        _teachCard.sizeDelta = new Vector2(TeachWidth, cardH);
+
+        float y = cardH * 0.5f - TeachPad;     // top inner edge, walking downward
+        if (hasSwatch)
+        {
+            _teachSwatch.rectTransform.anchoredPosition = new Vector2(0, y - TeachSwatch * 0.5f);
+            y -= TeachSwatch + TeachGapS;
+        }
+        _teachTitle.rectTransform.anchoredPosition = new Vector2(0, y - TeachTitleH * 0.5f);
+        y -= TeachTitleH + TeachGapT;
+
+        _teachBody.rectTransform.sizeDelta = new Vector2(TeachBodyW, bodyH);
+        _teachBody.rectTransform.anchoredPosition = new Vector2(0, y - bodyH * 0.5f);
+        y -= bodyH + TeachGapB;
+
+        _teachOkRT.anchoredPosition = new Vector2(0, y - TeachOkH * 0.5f);
+        return cardH;
+    }
+
+    /// <summary>True while an explainer is up — gameplay must treat this as a hard pause.</summary>
+    public bool TeachOpen => _teachPanel != null && _teachPanel.activeSelf;
+
+    /// <summary>
+    /// Show the explainer and freeze until the player acknowledges it.
+    /// <paramref name="accent"/> must be a UI palette colour (it tints chrome); <paramref name="swatch"/>
+    /// is the gameplay colour of the thing itself, or clear to hide the sample dot.
+    /// Pass a <paramref name="worldTarget"/> to also point at something on screen.
+    /// </summary>
+    public void ShowTeachCard(string title, string body, Color accent, Color swatch,
+                              System.Action onClosed,
+                              Camera cam = null, Vector3 worldTarget = default(Vector3),
+                              string markerLabel = null)
+    {
+        if (_teachPanel == null) return;
+        _onTeachClosed = onClosed;
+        _teachT = 0f;
+
+        _teachTitle.text = Spaced(title);
+        _teachTitle.color = accent;
+        Neon(_teachTitle, accent, 0.8f);
+        _teachBody.text = body;
+        _teachFrame.color = new Color(accent.r, accent.g, accent.b, 0.9f);
+
+        bool hasSwatch = swatch.a > 0.01f;
+        _teachSwatch.gameObject.SetActive(hasSwatch);
+        if (hasSwatch) _teachSwatch.color = swatch;
+
+        float cardH = LayoutTeachCard(hasSwatch);
+
+        _teachCam = cam;
+        _teachWorld = worldTarget;
+        bool hasTarget = cam != null;
+        _teachMarker.SetActive(hasTarget);
+
+        if (hasTarget)
+        {
+            // A pointed-at object has to stay visible, so the veil only knocks the maze back
+            // rather than burying it, and the card takes the half of the screen the target is not
+            // in — pushed as far to that edge as it will go without clipping off screen.
+            _teachVeil.color = new Color(PanelVeil.r, PanelVeil.g, PanelVeil.b, 0.62f);
+            _teachRing.color = accent;
+            _teachMarkerLabel.text = markerLabel ?? "";
+            _teachMarkerLabel.color = accent;
+            Neon(_teachMarkerLabel, accent, 0.75f);
+            TrackTeachMarker();
+
+            // 110 rather than a token gap: pushed to the bottom edge this card lands right on the
+            // Android gesture bar / rounded corners, and pushed to the top it fouls the notch.
+            float halfCanvas = (_canvas.transform as RectTransform).rect.height * 0.5f;
+            float rest = Mathf.Max(0f, halfCanvas - cardH * 0.5f - 110f);
+            bool targetHigh = _teachMarker.GetComponent<RectTransform>().anchoredPosition.y > 0f;
+            _teachCard.anchoredPosition = new Vector2(0, targetHigh ? -rest : rest);
+        }
+        else
+        {
+            _teachVeil.color = new Color(PanelVeil.r, PanelVeil.g, PanelVeil.b, 0.97f);
+            _teachCard.anchoredPosition = Vector2.zero;
+        }
+
+        _teachPanel.SetActive(true);
+        Haptics.Medium();
+    }
+
+    private void CloseTeachCard()
+    {
+        if (_teachPanel != null) _teachPanel.SetActive(false);
+        var cb = _onTeachClosed;
+        _onTeachClosed = null;      // cleared BEFORE invoking, so a callback that opens another
+        if (cb != null) cb();       // card can't have its own callback wiped by this one
+    }
+
+    /// <summary>Force the card away without running its callback (bailing out to the menu).</summary>
+    public void HideTeachCard()
+    {
+        _onTeachClosed = null;
+        if (_teachPanel != null) _teachPanel.SetActive(false);
+    }
+
+    /// <summary>Keep the marker glued to its world position — the camera shakes and punch-zooms.</summary>
+    private void TrackTeachMarker()
+    {
+        if (_teachCam == null || _teachMarker == null) return;
+        Vector3 sp = _teachCam.WorldToScreenPoint(_teachWorld);
+        Vector2 local;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            _canvas.transform as RectTransform, sp, null, out local);
+        _teachMarker.GetComponent<RectTransform>().anchoredPosition = local;
+    }
 
     // ---------- daily result ----------
 
