@@ -112,3 +112,10 @@ InitTestScene*.unity*
 # Editor scratch output (profiler captures, recorder output)
 /[Cc]apture/
 /ProfilerCaptures/
+
+# Signing keys — never commit. The upload key lives in Keystore/ and is referenced by
+# ProjectSettings as '{inproject}: Keystore/key.keystore', so it sits inside the repo
+# tree and would otherwise be swept up by 'git add -A'.
+/Keystore/
+*.keystore
+*.jks

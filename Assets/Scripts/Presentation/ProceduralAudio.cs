@@ -2,18 +2,25 @@ using UnityEngine;
 
 /// <summary>
 /// All sound is synthesized at runtime with AudioClip.Create — no audio files.
-/// Ping = soft sine sweep down (with random pitch), wall tick = tiny blip (pitch rises
-/// as the ring sweeps), win = rising arpeggio, plus streak-up / star / wrong cues.
+/// Ping = soft sine sweep down (with random pitch), wall tick = tiny blip (pitch rises as the
+/// ring sweeps), level clear = a rising arpeggio whose length reflects how cleanly you cleared,
+/// plus star lost/gained, rewind, countdown and UI cues.
+///
+/// Two sources on purpose: gameplay cues share `_main`, while UI clicks get their own so a
+/// button press can never cut a gameplay cue off mid-play.
 /// </summary>
 public class ProceduralAudio : MonoBehaviour
 {
     private const int SampleRate = 44100;
 
-    private AudioSource _main;   // ping / win / streak / star / wrong
+    private AudioSource _main;   // ping / clear / star / rewind / countdown
     private AudioSource _tick;   // ticks (own source so they overlap the ping)
     private AudioSource _move;   // looping movement whoosh (volume rides speed)
 
-    private AudioClip _ping, _tickClip, _win, _streak, _star, _wrong, _moveClip, _rewind, _lose, _timeWarn, _countTick;
+    private AudioClip _ping, _tickClip, _star, _moveClip, _rewind, _lose, _timeWarn, _countTick;
+    private AudioClip _starLost, _starGained, _whoosh, _button, _teach, _exitHit;
+    private AudioClip _praise0, _praise1, _praise2;
+    private AudioSource _ui;     // own source so UI never cuts off a gameplay cue mid-play
     private float _moveTargetVol, _moveLevel;
 
     public void Init()
@@ -29,15 +36,36 @@ public class ProceduralAudio : MonoBehaviour
 
         _ping     = BuildSweep(880f, 220f, 0.35f, 0.5f);
         _tickClip = BuildSweep(1400f, 1100f, 0.035f, 0.6f);
-        _win      = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f, 1046.5f }, 0.11f, 0.5f);
-        _streak   = BuildArpeggio(new[] { 659.25f, 987.77f }, 0.09f, 0.45f);
         _star     = BuildSweep(1200f, 1600f, 0.09f, 0.45f);
-        _wrong    = BuildSweep(220f, 150f, 0.18f, 0.5f);
         _rewind   = BuildRewind();
         _lose     = BuildArpeggio(new[] { 392f, 311f, 233f }, 0.18f, 0.5f); // descending = "aww, failed"
         _timeWarn = BuildSweep(620f, 620f, 0.18f, 0.45f);                   // steady heads-up beep
         _countTick= BuildSweep(1000f, 1000f, 0.05f, 0.5f);                  // short countdown tick
         _moveClip = BuildMoveLoop();
+
+        _ui = gameObject.AddComponent<AudioSource>();
+        _ui.playOnAwake = false; _ui.spatialBlend = 0f; _ui.volume = 0.5f;
+
+        // Losing a life is the harshest thing that happens in a level, so it gets the harshest
+        // sound: three notes falling more than an octave.
+        _starLost   = BuildArpeggio(new[] { 523.25f, 349.23f, 220f }, 0.10f, 0.55f);
+        // Gaining one mirrors it exactly — same three notes, climbing.
+        _starGained = BuildArpeggio(new[] { 523.25f, 783.99f, 1046.5f }, 0.09f, 0.5f);
+        _whoosh     = BuildSweep(300f, 900f, 0.22f, 0.35f);   // level regenerated
+        _button     = BuildSweep(1500f, 1900f, 0.035f, 0.30f); // dry UI click
+        _teach      = BuildArpeggio(new[] { 659.25f, 880f }, 0.07f, 0.35f); // card appears
+
+        // Reaching the exit: a C4 bloom that bends into tune. Deliberately still ringing when the
+        // praise sting lands ~0.4s later — it is the bass the sting resolves over, not a separate
+        // announcement competing with it.
+        _exitHit = BuildArrivalBloom(261.63f, 1.5f, 0.6f);
+
+        // Level-clear stings, one per praise tier. All resolve upward on the major triad so the
+        // clear always feels like an arrival — the tiers differ in how far they climb, so a
+        // flawless run is audibly a bigger deal without being a different piece of music.
+        _praise0 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f }, 0.10f, 0.5f);
+        _praise1 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f, 1046.50f }, 0.09f, 0.55f);
+        _praise2 = BuildArpeggio(new[] { 523.25f, 659.25f, 783.99f, 1046.50f, 1318.51f, 1567.98f }, 0.075f, 0.6f);
 
         _move.clip = _moveClip;
         _move.Play(); // runs continuously at volume 0; SetMoveLevel opens it up
@@ -45,6 +73,34 @@ public class ProceduralAudio : MonoBehaviour
 
     /// <summary>Time-rewind shimmer for the decoy penalty (kept gentle).</summary>
     public void PlayRewind() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_rewind, 0.6f); } }
+
+    /// <summary>The moment of touching the exit — a C-major bloom that becomes the bass bed for
+    /// the praise sting arriving on top of it.</summary>
+    public void PlayExitReached() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_exitHit, 0.85f); } }
+
+    /// <summary>The level-clear sting. <paramref name="starsLeft"/> picks how far it climbs.</summary>
+    public void PlayPraise(int starsLeft)
+    {
+        if (!_main) return;
+        _main.pitch = 1f;
+        AudioClip c = starsLeft >= 3 ? _praise2 : starsLeft >= 2 ? _praise1 : _praise0;
+        _main.PlayOneShot(c, 0.9f);
+    }
+
+    /// <summary>A life spent to a decoy. Deliberately the loudest negative cue in the game.</summary>
+    public void PlayStarLost() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_starLost, 0.9f); } }
+
+    /// <summary>A life restored by a bonus echo — the star-lost motif played backwards.</summary>
+    public void PlayStarGained() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_starGained, 0.85f); } }
+
+    /// <summary>Level regenerated (reset button).</summary>
+    public void PlayWhoosh() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_whoosh, 0.5f); } }
+
+    /// <summary>Every UI button. On its own source so it can never cut a gameplay cue short.</summary>
+    public void PlayButton() { if (_ui) { _ui.pitch = 1f; _ui.PlayOneShot(_button, 0.6f); } }
+
+    /// <summary>An explainer card appearing.</summary>
+    public void PlayTeach() { if (_ui) { _ui.pitch = 1f; _ui.PlayOneShot(_teach, 0.7f); } }
 
     public void PlayLose() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_lose, 0.8f); } }
     public void PlayTimeWarning() { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_timeWarn, 0.5f); } }
@@ -74,10 +130,7 @@ public class ProceduralAudio : MonoBehaviour
 
     public void PlayPing(float pitch = 1f) { if (_main) { _main.pitch = pitch; _main.PlayOneShot(_ping); } }
     public void PlayTick(float pitch = 1f) { if (_tick) { _tick.pitch = Mathf.Clamp(pitch, 0.6f, 2.5f); _tick.PlayOneShot(_tickClip); } }
-    public void PlayWin()    { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_win); } }
-    public void PlayStreak(int streakLevel) { if (_main) { _main.pitch = Mathf.Clamp(1f + streakLevel * 0.08f, 1f, 2f); _main.PlayOneShot(_streak); } }
     public void PlayStar(int index) { if (_main) { _main.pitch = 1f + index * 0.18f; _main.PlayOneShot(_star); } }
-    public void PlayWrong()  { if (_main) { _main.pitch = 1f; _main.PlayOneShot(_wrong); } }
 
     private AudioClip BuildSweep(float startHz, float endHz, float duration, float volume)
     {
@@ -94,6 +147,66 @@ public class ProceduralAudio : MonoBehaviour
             data[i] = Mathf.Sin((float)phase) * attack * decay * volume;
         }
         var clip = AudioClip.Create("sweep", samples, 1, SampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
+
+    /// <summary>
+    /// Contact. A warm C-major bloom of pure sines that bends UP into tune and rings out.
+    ///
+    /// This is the bass note the praise sting resolves over, not a rival to it. The sting is a
+    /// C-major arpeggio from C5; this is rooted an octave below with its own octave partial
+    /// landing on that same C5. They are one chord voiced across two events, which is why the
+    /// bloom can still be ringing when the sting arrives without the two colliding — bass under
+    /// melody is how music has always worked.
+    ///
+    /// The pitch bend is the hook. It starts 2.8% flat and settles over 130ms, so the sound
+    /// audibly locks into place. That resolution is the satisfying part, and it mirrors what the
+    /// player just did: the sonar has been searching in the dark, and this is contact landing.
+    ///
+    /// Three earlier attempts here failed for one shared reason — every other sound in this game
+    /// is a pure sine, so a struck bell (inharmonic metal) and a snap (noise transient) were both
+    /// foreign objects. "Different from the sting" was never the problem to solve; belonging to
+    /// the same palette was.
+    ///
+    /// Rooted at C4 rather than lower on purpose: phone speakers roll off below roughly 300Hz,
+    /// so a genuinely deep bloom would simply not exist on the device this ships to.
+    /// </summary>
+    private AudioClip BuildArrivalBloom(float rootHz, float duration, float volume)
+    {
+        int samples = Mathf.Max(1, Mathf.RoundToInt(SampleRate * duration));
+        var data = new float[samples];
+
+        float[] ratios = { 1f, 1.5f, 2f, 3f };        // root, fifth, octave, twelfth
+        float[] gains  = { 1f, 0.42f, 0.55f, 0.14f };
+        const float gainSum = 2.11f;
+        var phases = new double[ratios.Length];
+
+        for (int i = 0; i < samples; i++)
+        {
+            float t = (float)i / samples;
+            float secs = i / (float)SampleRate;
+
+            // Bend up into tune over the first 130ms — the "locking on" that makes it land.
+            float bend = Mathf.Lerp(0.972f, 1f, Easing.OutCubic(Mathf.Clamp01(secs / 0.13f)));
+
+            float sample = 0f;
+            for (int p = 0; p < ratios.Length; p++)
+            {
+                phases[p] += 2.0 * Mathf.PI * (rootHz * ratios[p] * bend) / SampleRate;
+                sample += Mathf.Sin((float)phases[p]) * gains[p];
+            }
+            sample /= gainSum;
+
+            // Soft swell in (no click), long ring out, breathing slowly as it goes.
+            float attack   = Mathf.Clamp01(secs / 0.028f);
+            float body     = Mathf.Exp(-2.6f * t);
+            float tremolo  = 1f + 0.08f * Mathf.Sin(2f * Mathf.PI * 5.5f * secs) * (1f - t);
+
+            data[i] = sample * attack * body * tremolo * volume;
+        }
+
+        var clip = AudioClip.Create("arrivalBloom", samples, 1, SampleRate, false);
         clip.SetData(data, 0);
         return clip;
     }

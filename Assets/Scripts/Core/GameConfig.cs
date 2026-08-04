@@ -19,14 +19,14 @@ public struct Difficulty
 }
 
 /// <summary>
-/// Central tuning block. Every knob for maze size, movement, sonar, juice, streaks,
-/// stars and the difficulty ramp lives here. No ScriptableObjects.
+/// Central tuning block. Every knob for maze size, movement, sonar, juice, stars-as-lives
+/// and the difficulty sawtooth lives here. No ScriptableObjects.
 /// </summary>
 public static class GameConfig
 {
     // ---- Maze / session length (aim: 20-60s per level) ----
     public const int   StartMazeSize     = 6;    // level 1 grid
-    public const int   MaxMazeSize        = 12;  // cap — we grow difficulty other ways past this
+    public const int   MaxMazeSize        = 14;  // cap — we grow difficulty other ways past this
     public const int   LevelsPerSizeStep  = 2;   // grid grows +1 every N levels
     public const float CellSize           = 1.0f;
     public const float WallThickness      = 0.12f;
@@ -49,7 +49,6 @@ public static class GameConfig
     public const float PlayerCollideSkin = 0.02f; // gap kept from walls when sliding
     public const float TapMaxDuration    = 0.22f; // quick touch that never engaged movement = a ping
     public const float MoveAudioMaxVol   = 0.16f; // loudest the movement drone gets
-    public const float HintMaxSeconds    = 12f;   // level-1 tutorial auto-dismiss
 
     // ---- Rewind penalty (touching a decoy) ----
     public const float RewindSeconds   = 2f;    // how far back the dot is sent
@@ -70,7 +69,7 @@ public static class GameConfig
     public const float BandStart          = 0.18f; // easy: fat readable flash
     public const float BandEnd            = 0.09f; // hard: thin flash
     public const float FlashBoost         = 1.7f;  // white bloom strength at the ring front
-    public const float FadeRampLevels     = 12f;   // levels to reach the hardest settings
+    public const float FadeRampLevels     = 10f;   // levels to reach the hardest settings
     public const float RingLife           = 1.1f;  // ring visual lifetime
     public const float OriginFlashTime    = 0.22f; // bright burst at the ping origin
     public const float OriginFlashScale   = 1.5f;
@@ -82,29 +81,31 @@ public static class GameConfig
     public const float PingDarkenAmount   = 0.14f; // brief screen darken as the ring bursts
     public const float PingDarkenTime     = 0.18f;
 
-    // ---- Pings budget / scoring ----
+    // ---- Reveals budget ----
+    // Reveals are the scarce resource now that score is gone. They were generous enough that
+    // players were clearing levels with pings still in hand, which made the whole sonar premise
+    // optional — the squeeze below is what puts the "spend one to see, or trust your memory"
+    // decision back in every level.
     public const int   TutorialPingBonus  = 3;     // +3,+2,+1 on levels 1..3
     public const int   RubberBandFails    = 2;     // after this many fails on a level...
     public const int   RubberBandPings    = 2;     // ...quietly grant this many extra pings
-    public const int   ScorePerPing       = 100;
-    public const float ScorePerSecond     = 8f;
-    public const int   ScoreBaseClear     = 250;   // flat reward per clear
+    public const float PingBudgetScale    = 0.72f; // fraction of grid size handed out as reveals
 
-    // ---- Streak (the retention hook) ----
-    public const float StreakStep         = 0.5f;  // multiplier = 1 + streak*StreakStep
-    public const float MaxStreakMultiplier= 6f;
-    public const int   StreakMinPingsSpare= 1;     // must finish with >= this many pings to keep streak
-    // A streak is a run of NEAR-PERFECT clears, not just survived ones: finish a level on 2 stars
-    // or fewer and it breaks. Without this the multiplier only ever reset on a timeout, so it
-    // climbed on autopilot and stopped meaning anything.
-    public const int   StreakStarRequirement = 3;
-
-    // ---- Stars (fraction of starting pings still in hand at clear) ----
-    public const float Star3PingFrac      = 0.5f;
-    public const float Star2PingFrac      = 0.22f;
+    // ---- Stars = lives ----
+    // Stars used to be a post-hoc rating of how many pings you had left. They are now a resource
+    // you spend during the level: three per level, one lost per decoy hit, one back for a bonus
+    // echo. Run out and the level is failed. This is what turns a decoy from "mild annoyance"
+    // into something worth actually avoiding.
+    public const int   StartStars         = 3;
+    public const int   MaxStars           = 3;     // an echo found at full health is a near-miss, not a waste
+    public const int   DecoyStarCost      = 1;
+    public const float DecoyTimePenalty   = 2f;    // seconds burned off the clock per decoy hit
+    public const int   BonusOrbStars      = 1;
 
     // ---- Loop timing ----
-    public const float LevelTimeLimit     = 45f;   // <=0 disables the fail timer
+    // 45s was comfortable enough that testers were finishing with time to spare on levels the
+    // curve considered hard. The clock is the pressure; it needs to bite.
+    public const float LevelTimeLimit     = 34f;   // <=0 disables the fail timer
     public const float CelebrationTime    = 1.5f;  // auto-advance delay after a clear
     public const float HitstopTime        = 0.15f; // freeze on exit reached
 
@@ -114,8 +115,8 @@ public static class GameConfig
     // said the game "got uninteresting". A twist now lands on level 3, and the next opens the
     // second sector, so no player sits through two identical levels in a row.
     public const int   DecoyStartLevel    = 3;
-    public const int   DecoyEveryLevels   = 4;
-    public const int   MaxDecoys          = 3;
+    public const int   DecoyEveryLevels   = 3;   // was 4 — decoys stack up faster
+    public const int   MaxDecoys          = 5;   // was 3; now the main source of difficulty
     // Level 6, not 5: the sector-1 finale is already the difficulty peak, and stacking a brand
     // new mechanic on top of the hardest level a new player has seen is how you lose them. It
     // debuts on the RELIEF level right after instead, where there is room to learn it.
@@ -146,7 +147,6 @@ public static class GameConfig
     // Progression needs a big beat every ~10-15 min, not just the per-level one. Levels are grouped
     // into named sectors that re-tint the whole maze and pay a bonus on completion.
     public const int   LevelsPerSector    = 5;
-    public const int   SectorClearBonus   = 600;
     public static readonly string[] SectorNames =
         { "SHALLOWS", "THE DEEP", "DRIFT", "THE HOLLOW", "ECHO CORE",
           "LONG DARK", "STILLWATER", "THE LATTICE" };
@@ -184,15 +184,16 @@ public static class GameConfig
     // ---- Bonus Echo orb (the variable reward) ----
     // Uncertain rewards hit harder than guaranteed ones, so this only appears some of the time and
     // only the sonar can find it — every ping becomes a small "did I hit gold?" pull.
-    public const float BonusOrbChance     = 0.4f;   // fraction of levels that contain one
-    public const int   BonusOrbScore      = 300;
+    //
+    // Now that it restores a life rather than paying points it has to be genuinely scarce: a
+    // reliable extra star every other level would just cancel the decoys out.
+    public const float BonusOrbChance     = 0.18f;  // fraction of levels that contain one
     public const float BonusOrbRadius     = 0.34f;  // pickup radius
     public const float BonusOrbPulseSpeed = 3.2f;
 
     // ---- Near-miss / clutch ----
     public const float FailRevealTime     = 1.8f;   // maze lights up on a timeout so you see how close
     public const float ClutchSeconds      = 3f;     // clearing with less than this left = CLUTCH
-    public const int   ClutchBonus        = 400;
 
     // ---- Daily streak ----
     public const int   DailyBonusPingsMax = 3;      // extra pings on your first level of the day
@@ -213,6 +214,24 @@ public static class GameConfig
     public static readonly Color DecoyRingColor  = new Color(1.0f, 0.22f, 0.22f, 1f); // red highlight outline
     public static readonly Color StreakColor     = new Color(1.0f, 0.6f, 0.15f, 1f); // flame
     public static readonly Color BonusOrbColor   = new Color(1.0f, 0.85f, 0.25f, 1f); // gold reward
+
+    // ---- Level-clear praise ----
+    // Replaces the star tally on the clear screen. Still keyed off stars remaining, so a clean
+    // run is acknowledged differently from a scrape — the player feels the difference without
+    // being shown a score they can't do anything with. Several per tier so the same word doesn't
+    // come up level after level and stop registering.
+    public static readonly string[] PraiseFlawless = { "FLAWLESS", "PERFECT", "UNTOUCHED", "MASTERFUL", "SUBLIME" };
+    public static readonly string[] PraiseGood     = { "FABULOUS", "AMAZING", "NICE ONE", "SHARP", "SUPERB", "SLICK" };
+    public static readonly string[] PraiseScraped  = { "PHEW!", "CLOSE ONE", "JUST MADE IT", "SURVIVED", "BARELY" };
+
+    /// <summary>A praise word for a clear that kept <paramref name="starsLeft"/> of its lives.</summary>
+    public static string PraiseFor(int starsLeft)
+    {
+        string[] pool = starsLeft >= MaxStars ? PraiseFlawless
+                      : starsLeft >= 2        ? PraiseGood
+                                              : PraiseScraped;
+        return pool[Random.Range(0, pool.Length)];
+    }
 
     // ---- Sector helpers ----
     public static int SectorIndex(int level) => Mathf.Max(0, (level - 1) / LevelsPerSector);
@@ -295,6 +314,18 @@ public static class GameConfig
     public static int LevelInSector(int level) => ((level - 1) % LevelsPerSector) + 1;
 
     /// <summary>
+    /// How many levels must still be CLEARED, counting this one, before a new sector begins.
+    ///
+    /// This is the ladder's anticipation hook. "You are on level 23" is a status; "THE HOLLOW in
+    /// 3" is a reason to keep playing right now. All the data was already here — it was simply
+    /// never shown until the moment of arrival, which spends the interest instead of building it.
+    /// </summary>
+    public static int LevelsToNextSector(int level) => LevelsPerSector - LevelInSector(level) + 1;
+
+    /// <summary>The name of the sector the player is working toward.</summary>
+    public static string NextSectorName(int level) => SectorName(level + LevelsToNextSector(level));
+
+    /// <summary>
     /// Build the difficulty profile for a given level. <paramref name="failStreak"/> is the
     /// number of consecutive fails on THIS level, used for rubber-banding.
     /// </summary>
@@ -322,9 +353,12 @@ public static class GameConfig
         }
 
         // ---- Reveals ----
+        // Reveals scale with grid size but no longer one-for-one: at PingBudgetScale a 12x12 maze
+        // buys 9 looks rather than 12, so a bigger maze means proportionally LESS of it you can
+        // afford to light up. This is the "reveals should be less" lever.
         int earlyBonus = Mathf.Max(0, TutorialPingBonus - (level - 1));
         int rubber = failStreak >= RubberBandFails ? RubberBandPings : 0;
-        d.pings = d.mazeSize + earlyBonus + rubber;
+        d.pings = Mathf.RoundToInt(d.mazeSize * PingBudgetScale) + earlyBonus + rubber;
         if (level > DeepStartLevel)
         {
             // Squeezed relative to grid size, so a bigger maze does NOT hand out proportionally
@@ -346,7 +380,10 @@ public static class GameConfig
         {
             // Extra grid rows buy seconds (a 16x16 in 45s would be unwinnable, not hard), and the
             // deep ramp then takes a cut back off the top.
-            float sizeBonus = (d.mazeSize - MaxMazeSize) * SecondsPerExtraRow;
+            // Clamped at zero: this is a bonus for oversized grids, never a penalty for small
+            // ones. Unclamped it went negative the moment MaxMazeSize was raised above the grid
+            // this level actually gets, which quietly docked level 14 seven seconds.
+            float sizeBonus = Mathf.Max(0f, (d.mazeSize - MaxMazeSize) * SecondsPerExtraRow);
             d.timeLimit = (LevelTimeLimit + sizeBonus) * Mathf.Lerp(1f, DeepTimeSqueeze, deepT);
         }
 

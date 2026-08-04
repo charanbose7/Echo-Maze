@@ -40,16 +40,23 @@ public class UIManager : MonoBehaviour
     private RectTransform _safe;
     private CanvasGroup _hudGroup;
 
-    private TMP_Text _levelText, _scoreText, _timerText, _streakText, _sectorText;
+    private TMP_Text _levelText, _timerText, _sectorText;
+    private Image[] _hudStars;             // the live star row (lives), top-left
+    private Image _starLossGlow;
+    private float _starLossT = -1f;
+    private int _starsShown;
     private TMP_Text _pingCountText;   // numeric reveal counter ("10  o")
     private Image _pingIcon;       // single circle icon next to the count
     private Sprite _dotSprite;
 
-    private Image _streakGlow;
     private Image _timerRing;      // bloom behind the clock; reddens as time runs out
     private TMP_Text _timerCaption;
     // Menu / settings / daily.
-    public System.Action OnPlay, OnDaily, OnDailyResultClosed, OnProgressReset;
+    public System.Action OnPlay, OnDaily, OnDailyResultClosed, OnResetLevel, OnHome;
+
+    /// <summary>Set by GameManager. Lets every button click and card make a sound — testers said
+    /// audio is the main thing keeping them playing, and silent UI was the obvious hole.</summary>
+    public ProceduralAudio Audio;
 
     /// <summary>Unscaled time of the most recent UI button press.</summary>
     public float LastUiPressTime { get; private set; } = -10f;
@@ -63,7 +70,7 @@ public class UIManager : MonoBehaviour
     private TMP_Text _dailyLabel;
     private Image _dailyFlame;
     private Image _dailyCheck;
-    private GameObject _settingsPanel, _dailyResultPanel, _confirmRow;
+    private GameObject _settingsPanel, _dailyResultPanel;
 
     // Teach card — the one blocking explainer, reused by every "you have never seen this" moment.
     private GameObject _teachPanel, _teachMarker;
@@ -74,15 +81,36 @@ public class UIManager : MonoBehaviour
     private System.Action _onTeachClosed;
     private Camera _teachCam;
     private Vector3 _teachWorld;
+    private RectTransform _teachUiTarget;   // set instead of _teachCam to point at a HUD element
+    private RectTransform _teachUiTarget2;  // optional second element; the ring centres on both
     private float _teachT;
+
+    // HUD elements the tutorial points at. Exposed as rects rather than as "show the clock hint"
+    // methods so the teach card stays generic and the tutorial owns the wording.
+    public RectTransform TimerRect { get { return _timerText != null ? _timerText.rectTransform : null; } }
+    public RectTransform RevealsRect { get { return _pingCountText != null ? _pingCountText.rectTransform : null; } }
+
+    /// <summary>The dot beside the reveal count. The readout is a digit AND an icon, so the
+    /// tutorial passes both and the reticle centres on the pair rather than on the number.</summary>
+    public RectTransform RevealsIconRect { get { return _pingIcon != null ? _pingIcon.rectTransform : null; } }
+    /// <summary>The MIDDLE star, so the reticle sits centred over the whole row rather than
+    /// hanging off the leftmost one and half off the edge of the screen.</summary>
+    public RectTransform StarsRect
+    {
+        get
+        {
+            if (_hudStars == null || _hudStars.Length == 0) return null;
+            return _hudStars[_hudStars.Length / 2].rectTransform;
+        }
+    }
     private TMP_Text _soundLabel, _hapticsLabel, _dailyResultText;
     private GameObject _gearInGame;
 
-    private GameObject _startOverlay, _celebOverlay, _hint;
-    private TMP_Text _hintText;
+    private GameObject _startOverlay, _celebOverlay;
     private TMP_Text _startSub, _celebTitle, _celebScore;
-    private Image[] _stars = new Image[3];
-    private TMP_Text _newBest;
+    private TMP_Text _celebPraise;         // "FLAWLESS", "NICE ONE" — replaces the star tally
+    private Image _praiseGlow;
+    private float _praiseT = -1f;
     private TMP_Text _rewindText;
     private float _rewindT = -1f;
     private TMP_Text _bannerText;          // sector intro / orb / near-miss callouts
@@ -100,11 +128,6 @@ public class UIManager : MonoBehaviour
     private float _flashA, _darkA;
     private Color _flashColor = Color.white;
     private float _coverA, _coverTarget;
-    private float _scoreDisplay; private int _scoreTarget, _scoreShown;
-    private readonly float[] _starT = new float[3];
-    private readonly bool[] _starShown = new bool[3];
-    private int _streakCount; private float _streakMul; private bool _streakOn;
-    private float _newBestT = -1f;
     private TMP_Text _streakLost;          // "STREAK LOST" callout
     /// <summary>Resting Y of the streak-lost callout. Clears the score line, which ends at -140.</summary>
     private const float StreakLostY = -250f;
@@ -155,24 +178,38 @@ public class UIManager : MonoBehaviour
         // Everything in the safe area is gameplay HUD, so one group toggles it all off for the menu.
         _hudGroup = safeGO.AddComponent<CanvasGroup>();
 
-        // ---- Top-left: score, with the streak multiplier tucked under it ----
-        // Score is a running tally you glance at; it belongs in a corner, not centre stage.
-        _scoreText = Text_("Score", _safe, new Vector2(0, 1), new Vector2(34, -18), new Vector2(520, 70), 46, TextAnchor.UpperLeft, "0");
-        _scoreText.color = new Color(0.9f, 0.97f, 1f, 0.95f);
-        Neon(_scoreText, Accent, 0.45f);
+        // ---- Top-left: the star row (lives) ----
+        // This replaced the score readout. Score was a number you glanced at and forgot; stars are
+        // a resource you are actively spending, so they have to be visible at all times and read
+        // instantly — filled vs hollow, no counting required.
+        _hudStars = new Image[GameConfig.MaxStars];
+        for (int i = 0; i < GameConfig.MaxStars; i++)
+        {
+            var sGO = new GameObject("HudStar" + i);
+            sGO.transform.SetParent(_safe, false);
+            var img = sGO.AddComponent<Image>();
+            img.sprite = VisualUtils.PingStar();
+            img.raycastTarget = false;
+            img.color = StarLit;
+            var srt = img.rectTransform;
+            srt.anchorMin = srt.anchorMax = new Vector2(0, 1); srt.pivot = new Vector2(0.5f, 0.5f);
+            srt.anchoredPosition = new Vector2(46 + i * 62, -46);
+            srt.sizeDelta = new Vector2(54, 54);
+            _hudStars[i] = img;
+        }
 
-        var glowGO = new GameObject("StreakGlow");
-        glowGO.transform.SetParent(_safe, false);
-        _streakGlow = glowGO.AddComponent<Image>();
-        _streakGlow.sprite = VisualUtils.RadialGlow();
-        _streakGlow.raycastTarget = false;
-        _streakGlow.color = new Color(GameConfig.StreakColor.r, GameConfig.StreakColor.g, GameConfig.StreakColor.b, 0f);
-        var grt = _streakGlow.rectTransform;
-        grt.anchorMin = grt.anchorMax = new Vector2(0, 1); grt.pivot = new Vector2(0.5f, 0.5f);
-        grt.anchoredPosition = new Vector2(78, -96); grt.sizeDelta = new Vector2(180, 180);
-        _streakText = Text_("Streak", _safe, new Vector2(0, 1), new Vector2(34, -80), new Vector2(400, 46), 32, TextAnchor.UpperLeft, "");
-        _streakText.color = new Color(1f, 0.8f, 0.4f, 0f);
-        Neon(_streakText, GameConfig.StreakColor, 0f); // alpha rides the streak fade
+        // Sits behind the row and flares red when one is lost — a number ticking down is easy to
+        // miss mid-drag, a flash is not.
+        var starGlowGO = new GameObject("StarLossGlow");
+        starGlowGO.transform.SetParent(_safe, false);
+        _starLossGlow = starGlowGO.AddComponent<Image>();
+        _starLossGlow.sprite = VisualUtils.RadialGlow();
+        _starLossGlow.raycastTarget = false;
+        _starLossGlow.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
+        var sgrt = _starLossGlow.rectTransform;
+        sgrt.anchorMin = sgrt.anchorMax = new Vector2(0, 1); sgrt.pivot = new Vector2(0.5f, 0.5f);
+        sgrt.anchoredPosition = new Vector2(108, -46); sgrt.sizeDelta = new Vector2(320, 220);
+        _starLossGlow.transform.SetAsFirstSibling();
 
         // ---- Top-centre: level, then the TIMER directly beneath it ----
         // The timer used to sit in a corner and playtesters simply never noticed there was a time
@@ -243,24 +280,9 @@ public class UIManager : MonoBehaviour
         _gearInGame = BuildInGameGear();
         _startOverlay = BuildStart();
         _celebOverlay = BuildCeleb();
-        _hint = BuildHint();
         _dailyResultPanel = BuildDailyResult();
         _settingsPanel = BuildSettings();   // built late so it draws above the menu
         _teachPanel = BuildTeachCard();     // later still — an explainer outranks everything
-
-        _newBest = Display(Text_("NewBest", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 470), new Vector2(980, 90), 56, TextAnchor.MiddleCenter, Spaced("NEW BEST!")));
-        _newBest.color = new Color(1f, 0.85f, 0.3f, 0f);
-        Neon(_newBest, Gold, 0.8f);
-
-        // Losing a streak has to hurt as visibly as gaining one rewards.
-        //
-        // Sits BELOW the celebration's score line, which lives at y -70 and is 140 tall (so it
-        // reaches -140) and can run to three lines on a clutch sector clear: "+2820 x3.0" /
-        // "CLUTCH +400" / "SECTOR +600". At -110 this callout printed straight through it.
-        _streakLost = Display(Text_("StreakLost", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f),
-                              new Vector2(0, StreakLostY), new Vector2(1000, 120), 46, TextAnchor.MiddleCenter, ""));
-        _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
-        Neon(_streakLost, Danger, 0.85f);
 
         _rewindText = Display(Text_("Rewind", _canvas.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 140), new Vector2(1000, 120), 74, TextAnchor.MiddleCenter, "REWIND  -" + Mathf.RoundToInt(GameConfig.RewindSeconds) + "s"));
         _rewindText.color = new Color(0.5f, 0.85f, 1f, 0f);
@@ -309,7 +331,7 @@ public class UIManager : MonoBehaviour
         // Top-most: opaque cover for masking the between-level swap (created last = drawn last).
         _cover = FullScreen("Cover", new Color(0, 0, 0, 0));
 
-        SetScoreImmediate(0);
+        SetStars(GameConfig.StartStars, GameConfig.MaxStars);
     }
 
     // ---------- public API ----------
@@ -339,13 +361,22 @@ public class UIManager : MonoBehaviour
         NeonColor(_sectorText, color, 0.6f);   // caption glows in its sector's colour
     }
 
-    public void SetScoreImmediate(int score)
+    /// <summary>Update the live star row. Spent stars go hollow rather than disappearing, so the
+    /// player can always see how much they have already lost, not just what is left.</summary>
+    public void SetStars(int remaining, int max)
     {
-        _scoreTarget = score; _scoreDisplay = score; _scoreShown = score;
-        _scoreText.text = score.ToString();
+        _starsShown = remaining;
+        if (_hudStars == null) return;
+        for (int i = 0; i < _hudStars.Length; i++)
+        {
+            bool lit = i < remaining;
+            _hudStars[i].color = lit ? StarLit : new Color(StarLit.r, StarLit.g, StarLit.b, 0.16f);
+            _hudStars[i].rectTransform.localScale = Vector3.one * (lit ? 1f : 0.82f);
+        }
     }
 
-    public void RollScoreTo(int target) => _scoreTarget = target;
+    /// <summary>Flare the star row red — called the instant a life is lost.</summary>
+    public void PulseStarLost() { _starLossT = 0f; }
 
     /// <summary>Reset the reveal counter for a new level (kept the old name so callers don't change).</summary>
     public void BuildPingDots(int total)
@@ -402,18 +433,20 @@ public class UIManager : MonoBehaviour
             _timerRing.color = new Color(c.r, c.g, c.b, _timerUrgent ? 0.20f : (warn ? 0.11f : 0.05f));
     }
 
-    public void SetStreak(int streakCount, float multiplier)
+    public void ShowStart(int currentLevel, int dayStreak, bool dailyDone, bool dailyUnlocked)
     {
-        _streakCount = streakCount; _streakMul = multiplier;
-        _streakOn = streakCount > 0;
-        _streakText.text = _streakOn ? "x" + multiplier.ToString("0.0") : "";
-    }
-
-    public void ShowStart(int bestScore, int bestStreak, int dayStreak, bool dailyDone, bool dailyUnlocked)
-    {
-        _startSub.text = bestScore > 0
-            ? "Best  " + bestScore + "        Streak  " + bestStreak
-            : "Drag to move   •   Tap to ping";
+        // Where they are, and what they are heading for. A "best" figure was dropped from here —
+        // it only ever tells a player they were once further along than they are now — and the
+        // space is far better spent naming the next milestone, which is something to play TOWARD
+        // rather than a record of the past.
+        if (currentLevel > 1)
+        {
+            int toNext = GameConfig.LevelsToNextSector(currentLevel);
+            _startSub.text = "Level  " + currentLevel + "        "
+                           + GameConfig.NextSectorName(currentLevel) + "  in  " + toNext;
+        }
+        else _startSub.text = "Drag to move   •   Tap to ping";
+        if (_playLabel != null) _playLabel.text = Spaced(currentLevel > 1 ? "CONTINUE" : "PLAY");
 
         // Daily button reflects today's state at a glance, and locks once it's been played —
         // one attempt per day is what makes the daily meaningful.
@@ -472,8 +505,6 @@ public class UIManager : MonoBehaviour
         _hudGroup.interactable = show;
     }
 
-    public void ShowHint() => _hint.SetActive(true);
-    public void HideHint() => _hint.SetActive(false);
 
     /// <summary>
     /// Retitle the celebration panel (e.g. "SECTOR CLEAR" on a finale).
@@ -499,20 +530,31 @@ public class UIManager : MonoBehaviour
         NeonColor(_celebTitle, Accent, 0.85f);
         if (_celebGlow != null) _celebGlow.color = new Color(Accent.r, Accent.g, Accent.b, 0.16f);
         _celebScore.text = "";
-        for (int i = 0; i < 3; i++) { _starShown[i] = false; _starT[i] = 0f; _stars[i].transform.localScale = Vector3.zero; }
+        _celebPraise.text = "";
+        _celebPraise.transform.localScale = Vector3.zero;
+        _praiseT = -1f;
+        if (_praiseGlow != null) _praiseGlow.color = new Color(Gold.r, Gold.g, Gold.b, 0f);
         _celebOverlay.SetActive(true);
     }
     public void SetCelebrationScoreLine(string line) => _celebScore.text = line;
-    /// <summary>
-    /// Also clears the streak-lost callout: it lives on the canvas rather than inside the
-    /// celebration overlay, so it would otherwise survive into the next level.
-    /// </summary>
     public void HideCelebration()
     {
         _celebOverlay.SetActive(false);
-        HideStreakLost();
     }
-    public void PopStar(int index) { if (index >= 0 && index < 3) { _starShown[index] = true; _starT[index] = 0f; } }
+
+    /// <summary>
+    /// Slam the praise word in. Deliberately not a fade: it overshoots, snaps back and drags a
+    /// bloom with it, because this is the one moment per level that has to feel like a reward.
+    /// </summary>
+    public void ShowPraise(string word, Color col)
+    {
+        if (_celebPraise == null) return;
+        _celebPraise.text = Spaced(word);
+        _celebPraise.color = col;
+        Neon(_celebPraise, col, 0.95f);
+        if (_praiseGlow != null) _praiseGlow.color = new Color(col.r, col.g, col.b, 0f);
+        _praiseT = 0f;
+    }
 
     /// <summary>
     /// Big centered callout used for sector intros, CLUTCH clears and the near-miss line on a fail.
@@ -529,26 +571,7 @@ public class UIManager : MonoBehaviour
         if (_bannerFrame != null) _bannerFrame.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, 0f);
     }
 
-    /// <summary>
-    /// Announce a broken streak. Shows what was lost, so the number that vanishes from the HUD
-    /// is named rather than just silently gone.
-    /// </summary>
-    public void ShowStreakLost(int lostStreak, float lostMultiplier)
-    {
-        if (_streakLost == null) return;
-        _streakLost.text = Spaced("STREAK LOST") + "\n<size=60%>" + lostStreak + " in a row  ·  x"
-                         + lostMultiplier.ToString("0.0") + "  →  x1.0</size>";
-        _streakLostT = 0f;
-    }
 
-    public void HideStreakLost()
-    {
-        _streakLostT = -1f;
-        if (_streakLost != null) _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
-    }
-
-    public void ShowNewBest() => _newBestT = 0f;
-    public void HideNewBest() { _newBestT = -1f; _newBest.color = new Color(1f, 0.85f, 0.3f, 0f); }
     public void ShowRewind() => _rewindT = 0f;
     public void PlayRewindEffect() => _rewindFxT = 0f;
     public void Flash(float strength) { _flashColor = Color.white; _flashA = Mathf.Max(_flashA, strength); }
@@ -581,15 +604,6 @@ public class UIManager : MonoBehaviour
             _teachCard.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, pop);
         }
 
-        // Rolling score.
-        if (_scoreShown != _scoreTarget)
-        {
-            _scoreDisplay = Mathf.Lerp(_scoreDisplay, _scoreTarget, 1f - Mathf.Exp(-10f * dt));
-            if (Mathf.Abs(_scoreDisplay - _scoreTarget) < 0.6f) _scoreDisplay = _scoreTarget;
-            int r = Mathf.RoundToInt(_scoreDisplay);
-            if (r != _scoreShown) { _scoreShown = r; _scoreText.text = r.ToString(); }
-        }
-
         // Flash / darken decay.
         if (_flashA > 0f) { _flashA = Mathf.Max(0f, _flashA - dt * 2.2f); _flash.color = new Color(_flashColor.r, _flashColor.g, _flashColor.b, _flashA); }
         if (_darkA > 0f)  { _darkA  = Mathf.Max(0f, _darkA  - dt / GameConfig.PingDarkenTime); _dark.color = new Color(0, 0, 0, _darkA); }
@@ -601,59 +615,54 @@ public class UIManager : MonoBehaviour
             _cover.color = new Color(0, 0, 0, _coverA);
         }
 
-        // Stars pop in with overshoot.
-        for (int i = 0; i < 3; i++)
+        // Praise word: slams in oversized, settles with a wobble, bloom flares and eases off.
+        if (_praiseT >= 0f)
         {
-            if (!_starShown[i]) continue;
-            if (_starT[i] < 1f)
+            _praiseT += dt;
+            float t = _praiseT;
+
+            float scale;
+            if (t < 0.26f) scale = Mathf.Lerp(2.1f, 1f, Easing.OutCubic(t / 0.26f));  // slam
+            else if (t < 0.62f)                                                        // wobble
+                scale = 1f + 0.055f * Mathf.Sin((t - 0.26f) * 34f) * (1f - (t - 0.26f) / 0.36f);
+            else scale = 1f;
+            _celebPraise.transform.localScale = Vector3.one * scale;
+
+            // Slight tilt on the way in — a dead-straight word reads as a label, not a cheer.
+            float tilt = t < 0.35f ? Mathf.Lerp(-7f, 0f, Easing.OutCubic(t / 0.35f)) : 0f;
+            _celebPraise.transform.localRotation = Quaternion.Euler(0, 0, tilt);
+
+            if (_praiseGlow != null)
             {
-                _starT[i] = Mathf.Min(1f, _starT[i] + dt / 0.3f);
-                float s = Easing.OutBack(_starT[i]);
-                _stars[i].transform.localScale = Vector3.one * s;
-                _stars[i].color = StarLit;
+                float g = t < 0.18f ? t / 0.18f : Mathf.Max(0.28f, 1f - (t - 0.18f) / 0.9f);
+                var pc = _celebPraise.color;
+                _praiseGlow.color = new Color(pc.r, pc.g, pc.b, g * 0.30f);
+                _praiseGlow.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.75f, 1.1f, Mathf.Min(1f, t / 0.4f));
             }
         }
 
-        // Streak flame: brighten + pulse with the multiplier.
-        float targetGlow = _streakOn ? Mathf.Clamp01(0.2f + _streakCount * 0.12f) : 0f;
-        float pulse = _streakOn ? (0.85f + 0.15f * Mathf.Sin(Time.unscaledTime * 6f)) : 1f;
-        var gc = _streakGlow.color;
-        float ga = Mathf.Lerp(gc.a, targetGlow * pulse, dt * 8f);
-        _streakGlow.color = new Color(GameConfig.StreakColor.r, GameConfig.StreakColor.g, GameConfig.StreakColor.b, ga);
-        float scale = _streakOn ? Mathf.Min(2.2f, 1f + _streakCount * 0.12f) : 1f;
-        _streakGlow.rectTransform.localScale = Vector3.one * scale;
-        var tc = _streakText.color;
-        float sa = Mathf.Lerp(tc.a, _streakOn ? 1f : 0f, dt * 8f);
-        _streakText.color = new Color(1f, 0.86f, 0.5f, sa);
-        NeonColor(_streakText, GameConfig.StreakColor, sa * 0.85f);   // flame edge fades with it
-
-        // NEW BEST pop then fade.
-        if (_newBestT >= 0f)
+        // Star-loss flare: red bloom behind the row, and the row itself kicks. Fires on the frame
+        // a life is spent, because a hollow star appearing is easy to miss mid-drag.
+        if (_starLossT >= 0f)
         {
-            _newBestT += dt;
-            float t = _newBestT;
-            float pop = t < 0.3f ? Easing.OutBack(t / 0.3f) : 1f;
-            float alpha = t < 1.2f ? 1f : Mathf.Clamp01(1f - (t - 1.2f) / 0.6f);
-            _newBest.transform.localScale = Vector3.one * pop;
-            _newBest.color = new Color(1f, 0.85f, 0.3f, alpha);
-            if (t > 1.8f) _newBestT = -1f;
-        }
+            _starLossT += dt;
+            float t = _starLossT;
+            float a = Mathf.Clamp01(1f - t / 0.55f);
+            _starLossGlow.color = new Color(Danger.r, Danger.g, Danger.b, a * 0.55f);
+            _starLossGlow.rectTransform.localScale = Vector3.one * Mathf.Lerp(0.7f, 1.35f, 1f - a);
 
-        // STREAK LOST: snaps in oversized, shudders, then sinks away. Deliberately not a gentle
-        // fade — the point is that something was taken.
-        if (_streakLostT >= 0f)
-        {
-            _streakLostT += dt;
-            float t = _streakLostT;
-            float pop = t < 0.22f ? Mathf.Lerp(1.6f, 1f, Easing.OutCubic(t / 0.22f)) : 1f;
-            float shake = t < 0.55f ? Mathf.Sin(t * 46f) * 14f * (1f - t / 0.55f) : 0f;
-            float sink  = t > 1.15f ? (t - 1.15f) * 90f : 0f;
-            float alpha = t < 1.15f ? 1f : Mathf.Clamp01(1f - (t - 1.15f) / 0.55f);
-            _streakLost.rectTransform.anchoredPosition = new Vector2(shake, StreakLostY - sink);
-            _streakLost.transform.localScale = Vector3.one * pop;
-            _streakLost.color = new Color(Danger.r, Danger.g, Danger.b, alpha);
-            NeonColor(_streakLost, Danger, alpha * 0.85f);
-            if (t > 1.7f) { _streakLostT = -1f; }
+            // The star that just went hollow is the one at index _starsShown.
+            if (_hudStars != null && _starsShown >= 0 && _starsShown < _hudStars.Length)
+            {
+                float kick = t < 0.3f ? 1f + 0.45f * (1f - t / 0.3f) : 1f;
+                _hudStars[_starsShown].rectTransform.localScale = Vector3.one * (0.82f * kick);
+            }
+            if (t > 0.6f)
+            {
+                _starLossT = -1f;
+                _starLossGlow.color = new Color(Danger.r, Danger.g, Danger.b, 0f);
+                SetStars(_starsShown, _hudStars != null ? _hudStars.Length : 3);
+            }
         }
 
         // Lost-reveal counter flash: red pop settling back to normal.
@@ -756,15 +765,6 @@ public class UIManager : MonoBehaviour
                 _rewindOverlay.color = new Color(0.3f, 0.7f, 1f, 0f);
                 _scanBar.color = new Color(0.6f, 0.9f, 1f, 0f);
             }
-        }
-
-        // Tutorial hint pulse so it's actually noticed.
-        if (_hint != null && _hint.activeSelf)
-        {
-            float a = 0.62f + 0.35f * (0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f));
-            _hintText.color = new Color(0.75f, 0.9f, 1f, a);
-            float sc = 1f + 0.04f * Mathf.Sin(Time.unscaledTime * 3f);
-            _hintText.rectTransform.localScale = new Vector3(sc, sc, 1f);
         }
     }
 
@@ -925,7 +925,12 @@ public class UIManager : MonoBehaviour
         // its ping on pointer-UP — the same instant onClick runs — so this timestamp lets the
         // player reliably discard that press. It doesn't depend on UI raycast timing, which makes
         // it a dependable backstop to the IsOverUI() check.
-        btn.onClick.AddListener(() => { LastUiPressTime = Time.unscaledTime; Haptics.Selection(); });
+        btn.onClick.AddListener(() =>
+        {
+            LastUiPressTime = Time.unscaledTime;
+            Haptics.Selection();
+            if (Audio != null) Audio.PlayButton();   // every button in the game, one place
+        });
         var colors = btn.colors;
         colors.normalColor = Color.white;
         colors.highlightedColor = new Color(1.25f, 1.25f, 1.25f, 1f);
@@ -1050,31 +1055,26 @@ public class UIManager : MonoBehaviour
         _celebTitle.color = TitleText;
         Neon(_celebTitle, Accent, 0.85f);
 
-        // Warm bloom under the star row.
-        var starGlowGO = new GameObject("StarGlow");
-        starGlowGO.transform.SetParent(go.transform, false);
-        var starGlow = starGlowGO.AddComponent<Image>();
-        starGlow.sprite = VisualUtils.RadialGlow();
-        starGlow.raycastTarget = false;
-        starGlow.color = new Color(Accent.r, Accent.g, Accent.b, 0.16f);
-        var sgrt = starGlow.rectTransform;
-        sgrt.anchorMin = sgrt.anchorMax = new Vector2(0.5f, 0.5f); sgrt.pivot = new Vector2(0.5f, 0.5f);
-        sgrt.anchoredPosition = new Vector2(0, 90); sgrt.sizeDelta = new Vector2(720, 380);
+        // Warm bloom under the praise word.
+        var praiseGlowGO = new GameObject("PraiseGlow");
+        praiseGlowGO.transform.SetParent(go.transform, false);
+        _praiseGlow = praiseGlowGO.AddComponent<Image>();
+        _praiseGlow.sprite = VisualUtils.RadialGlow();
+        _praiseGlow.raycastTarget = false;
+        _praiseGlow.color = new Color(Gold.r, Gold.g, Gold.b, 0f);
+        var pgrt = _praiseGlow.rectTransform;
+        pgrt.anchorMin = pgrt.anchorMax = new Vector2(0.5f, 0.5f); pgrt.pivot = new Vector2(0.5f, 0.5f);
+        pgrt.anchoredPosition = new Vector2(0, 90); pgrt.sizeDelta = new Vector2(900, 420);
 
-        // Star row — sonar ping-markers, tinted cyan to match the HUD rather than gold.
-        var starSprite = VisualUtils.PingStar();
-        for (int i = 0; i < 3; i++)
-        {
-            var s = new GameObject("Star" + i);
-            s.transform.SetParent(go.transform, false);
-            var img = s.AddComponent<Image>();
-            img.sprite = starSprite; img.raycastTarget = false; img.color = StarLit;
-            var rt = img.rectTransform;
-            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f); rt.pivot = new Vector2(0.5f, 0.5f);
-            rt.anchoredPosition = new Vector2((i - 1) * 150f, 90f); rt.sizeDelta = new Vector2(120, 120);
-            rt.localScale = Vector3.zero;
-            _stars[i] = img;
-        }
+        // The star row that used to sit here is gone. Stars are LIVES now — showing a tally of
+        // what survived reads as a grade on a test the player didn't sit, and testers said it
+        // meant nothing to them. A single word of praise is the reward instead: it lands faster,
+        // varies run to run, and doesn't invite the player to feel they underperformed.
+        _celebPraise = Display(Text_("CPraise", go.transform as RectTransform, new Vector2(0.5f, 0.5f),
+                              new Vector2(0, 90), new Vector2(1040, 150), 82, TextAnchor.MiddleCenter, ""));
+        _celebPraise.color = Gold;
+        Neon(_celebPraise, Gold, 0.9f);
+        _celebPraise.transform.localScale = Vector3.zero;
 
         _celebScore = Text_("CScore", go.transform as RectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, -70), new Vector2(1000, 140), 42, TextAnchor.MiddleCenter, "");
         _celebScore.color = new Color(0.9f, 0.97f, 1f, 0.95f);
@@ -1088,7 +1088,10 @@ public class UIManager : MonoBehaviour
     public void OpenSettings()
     {
         RefreshSettingLabels();
-        _confirmRow.SetActive(false);
+        // "Quit to menu" only makes sense from inside a level — the in-game gear is visible
+        // exactly then, so it doubles as the test for whether a level is in flight.
+        if (_settingsHomeBtn != null)
+            _settingsHomeBtn.gameObject.SetActive(_gearInGame != null && _gearInGame.activeSelf);
         _settingsPanel.SetActive(true);
     }
 
@@ -1155,44 +1158,25 @@ public class UIManager : MonoBehaviour
             if (SaveData.HapticsOn) Haptics.Success();
         });
 
-        // Destructive: hidden behind a confirm step so it can't be hit by accident.
-        TMP_Text resetLabel;
-        var resetBtn = Button_("ResetBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -10), new Vector2(700, 110),
-                               "RESET PROGRESS", 34, Danger, false, out resetLabel);
-        resetBtn.onClick.AddListener(() => _confirmRow.SetActive(true));
+        // RESET PROGRESS used to live here, behind a confirm step. It is gone entirely.
+        //
+        // It made sense when a "run" was the unit of play and your save was a score you might want
+        // to start over from. Now that the game is a ladder and the level you reached IS the
+        // progress, the button's only possible effect is to destroy the thing the player is playing
+        // for. RETRY covers "this layout is beating me" and QUIT TO MENU covers "I want out" — no
+        // remaining need was being served, so the safest version of this button is no button.
 
-        var resetNote = Text_("ResetNote", root, new Vector2(0.5f, 0.5f), new Vector2(0, -95), new Vector2(760, 60), 24, TextAnchor.MiddleCenter,
-                              "clears stars and day streak · best score is kept");
-        resetNote.color = new Color(0.75f, 0.8f, 0.9f, 0.6f);
-
-        // Confirm row (hidden until Reset is pressed).
-        _confirmRow = new GameObject("ConfirmRow");
-        _confirmRow.transform.SetParent(root, false);
-        var crt = _confirmRow.AddComponent<RectTransform>();
-        crt.anchorMin = crt.anchorMax = new Vector2(0.5f, 0.5f); crt.pivot = new Vector2(0.5f, 0.5f);
-        crt.anchoredPosition = new Vector2(0, -240); crt.sizeDelta = new Vector2(800, 210);
-
-        var warn = Text_("Warn", crt, new Vector2(0.5f, 1f), new Vector2(0, -4), new Vector2(800, 60), 30, TextAnchor.UpperCenter,
-                         "Clear stars and day streak?");
-        warn.color = new Color(1f, 0.8f, 0.8f, 0.95f);
-
-        TMP_Text yesLabel, noLabel;
-        var yesBtn = Button_("ResetYes", crt, new Vector2(0.5f, 0.5f), new Vector2(-175, -35), new Vector2(320, 100),
-                             "CLEAR", 34, Danger, true, out yesLabel);
-        yesBtn.onClick.AddListener(() =>
+        // Quit to the menu. Lives here rather than on the HUD: it is a deliberate, rare action,
+        // and a stray tap on it mid-level would throw away the attempt. Only shown during a level
+        // — on the main menu there is nowhere to go home to.
+        TMP_Text homeLabel;
+        _settingsHomeBtn = Button_("SettingsHome", root, new Vector2(0.5f, 0.5f), new Vector2(0, -10),
+                                   new Vector2(700, 110), Spaced("QUIT TO MENU"), 34, Danger, false, out homeLabel);
+        _settingsHomeBtn.onClick.AddListener(() =>
         {
-            SaveData.ResetProgress();
-            _confirmRow.SetActive(false);
             CloseSettings();
-            // Wiping progress must also abandon the run in flight — otherwise the player keeps
-            // playing level 14 with a freshly-zeroed save, which is incoherent.
-            if (OnProgressReset != null) OnProgressReset();
-            ShowBanner("PROGRESS RESET", new Color(1f, 0.7f, 0.7f, 1f), 0.9f);
+            if (OnHome != null) OnHome();
         });
-        var noBtn = Button_("ResetNo", crt, new Vector2(0.5f, 0.5f), new Vector2(175, -35), new Vector2(320, 100),
-                            "CANCEL", 34, Accent, false, out noLabel);
-        noBtn.onClick.AddListener(() => _confirmRow.SetActive(false));
-        _confirmRow.SetActive(false);
 
         TMP_Text closeLabel;
         var closeBtn = Button_("CloseBtn", root, new Vector2(0.5f, 0.5f), new Vector2(0, -460), new Vector2(460, 120),
@@ -1202,6 +1186,8 @@ public class UIManager : MonoBehaviour
         go.SetActive(false);
         return go;
     }
+
+    private Button _settingsHomeBtn;
 
     // ---------- in-game gear ----------
 
@@ -1221,10 +1207,32 @@ public class UIManager : MonoBehaviour
         var irt2 = img.rectTransform;
         irt2.anchorMin = irt2.anchorMax = new Vector2(0.5f, 0.5f); irt2.pivot = new Vector2(0.5f, 0.5f);
         irt2.anchoredPosition = Vector2.zero; irt2.sizeDelta = new Vector2(58, 58);
+
+        // Two more along the bottom edge. Both are escape hatches players asked for by name:
+        // being stuck on a layout you keep dying in, and having no way out of a level at all.
+        // Text rather than icons — a glyph for "regenerate this maze" is not a thing anyone reads
+        // correctly, and there is room down here.
+        TMP_Text resetLbl;
+        var resetBtn = Button_("ResetLevelBtn", _safe, new Vector2(0f, 0f), new Vector2(238, 80),
+                               new Vector2(190, 96), Spaced("RETRY"), 28, Accent, false, out resetLbl);
+        resetBtn.onClick.AddListener(() => { if (OnResetLevel != null) OnResetLevel(); });
+
+        // HOME lives in the settings panel, not out here. Quitting a level is a rare, deliberate
+        // action and it sat one thumb-width from the play area; RETRY earns its place on the HUD
+        // because it is used mid-level, HOME does not.
+        _inGameButtons = new GameObject[] { resetBtn.gameObject };
         return btn.gameObject;
     }
 
-    public void ShowInGameGear(bool show) { if (_gearInGame != null) _gearInGame.SetActive(show); }
+    private GameObject[] _inGameButtons;
+
+    public void ShowInGameGear(bool show)
+    {
+        if (_gearInGame != null) _gearInGame.SetActive(show);
+        if (_inGameButtons == null) return;
+        for (int i = 0; i < _inGameButtons.Length; i++)
+            if (_inGameButtons[i] != null) _inGameButtons[i].SetActive(show);
+    }
 
     // ---------- teach card ----------
 
@@ -1398,6 +1406,15 @@ public class UIManager : MonoBehaviour
         _onTeachClosed = onClosed;
         _teachT = 0f;
 
+        // Take (and clear) whatever ShowTeachCardAtUI staged. Every other caller therefore gets a
+        // null target rather than inheriting the previous card's HUD anchor.
+        _teachUiTarget = _pendingUiTarget;
+        _teachUiTarget2 = _pendingUiTarget2;
+        _teachMarkerSize = _pendingUiTarget != null ? _pendingMarkerSize : 230f;
+        _pendingUiTarget = null;
+        _pendingUiTarget2 = null;
+        _pendingMarkerSize = 190f;
+
         _teachTitle.text = Spaced(title);
         _teachTitle.color = accent;
         Neon(_teachTitle, accent, 0.8f);
@@ -1412,8 +1429,11 @@ public class UIManager : MonoBehaviour
 
         _teachCam = cam;
         _teachWorld = worldTarget;
-        bool hasTarget = cam != null;
+        bool hasTarget = cam != null || _teachUiTarget != null;
         _teachMarker.SetActive(hasTarget);
+
+        var mrt0 = _teachMarker.GetComponent<RectTransform>();
+        mrt0.sizeDelta = new Vector2(_teachMarkerSize, _teachMarkerSize);
 
         if (hasTarget)
         {
@@ -1425,6 +1445,15 @@ public class UIManager : MonoBehaviour
             _teachMarkerLabel.text = markerLabel ?? "";
             _teachMarkerLabel.color = accent;
             Neon(_teachMarkerLabel, accent, 0.75f);
+
+            // Shrink the caption rect to its actual text. This is what makes the edge-clamp in
+            // TrackTeachMarker behave: at a fixed 520 wide the label's half-width was 260, so a
+            // target at x=458 (the reveal counter) got shunted 190px away from its own reticle
+            // just to stay on screen. Sized to content, "REVEALS" is ~160 wide and never needs
+            // moving at all.
+            _teachMarkerLabel.ForceMeshUpdate();
+            float lw = Mathf.Max(80f, _teachMarkerLabel.preferredWidth + 24f);
+            _teachMarkerLabel.rectTransform.sizeDelta = new Vector2(lw, 56f);
             TrackTeachMarker();
 
             // 110 rather than a token gap: pushed to the bottom edge this card lands right on the
@@ -1442,6 +1471,7 @@ public class UIManager : MonoBehaviour
 
         _teachPanel.SetActive(true);
         Haptics.Medium();
+        if (Audio != null) Audio.PlayTeach();
     }
 
     private void CloseTeachCard()
@@ -1459,16 +1489,121 @@ public class UIManager : MonoBehaviour
         if (_teachPanel != null) _teachPanel.SetActive(false);
     }
 
-    /// <summary>Keep the marker glued to its world position — the camera shakes and punch-zooms.</summary>
+    /// <summary>
+    /// Where a HUD element visually sits. For text this is the GLYPH centre, not the rect centre:
+    /// a TMP rect is sized for layout and is far bigger than the text in it — the timer's rect
+    /// centre is 58px above the actual "34", which is what made the ring swallow the LEVEL
+    /// heading. Non-text elements have no such gap, so the rect centre is already right.
+    /// </summary>
+    private Vector3 UiAnchor(RectTransform rt)
+    {
+        var tmp = rt.GetComponent<TMP_Text>();
+        if (tmp != null && tmp.textInfo != null && tmp.textInfo.characterCount > 0)
+            return rt.TransformPoint(tmp.textBounds.center);
+        return rt.position;
+    }
+
+    /// <summary>Canvas-local centre and half-extent of a HUD element's VISIBLE shape.</summary>
+    private Vector2 UiBox(RectTransform rt, RectTransform canvasRT, out Vector2 half)
+    {
+        var tmp = rt.GetComponent<TMP_Text>();
+        bool isText = tmp != null && tmp.textInfo != null && tmp.textInfo.characterCount > 0;
+        half = isText ? (Vector2)tmp.textBounds.size * 0.5f : rt.rect.size * 0.5f;
+
+        Vector3 sp = RectTransformUtility.WorldToScreenPoint(null, UiAnchor(rt));
+        Vector2 local;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRT, sp, null, out local);
+        return local;
+    }
+
+    /// <summary>
+    /// Keep the marker glued to its target. World targets need re-projecting every frame because
+    /// the camera shakes and punch-zooms; UI targets are re-read too, since the safe-area inset
+    /// is applied after layout and would otherwise leave the reticle a notch out of place.
+    /// </summary>
     private void TrackTeachMarker()
     {
-        if (_teachCam == null || _teachMarker == null) return;
-        Vector3 sp = _teachCam.WorldToScreenPoint(_teachWorld);
+        if (_teachMarker == null) return;
+
+        var canvasRT0 = _canvas.transform as RectTransform;
+
+        Vector3 sp;
+        if (_teachUiTarget != null && _teachUiTarget2 != null)
+        {
+            // Centre of the two shapes' UNION, not the midpoint of their pivots. The reveal
+            // readout is a 27x68 digit beside a 40x40 dot sitting 22px lower; averaging the two
+            // centres lands 7px above the true centre of the pair, which is visible as the ring
+            // riding high. Union it properly and it sits where the eye expects.
+            Vector2 hA, hB;
+            Vector2 a = UiBox(_teachUiTarget, canvasRT0, out hA);
+            Vector2 b = UiBox(_teachUiTarget2, canvasRT0, out hB);
+            Vector2 lo = Vector2.Min(a - hA, b - hB);
+            Vector2 hi = Vector2.Max(a + hA, b + hB);
+            _teachMarker.GetComponent<RectTransform>().anchoredPosition = (lo + hi) * 0.5f;
+            UpdateMarkerLabel((lo + hi) * 0.5f, canvasRT0);
+            return;
+        }
+
+        if (_teachUiTarget != null)
+            sp = RectTransformUtility.WorldToScreenPoint(null, UiAnchor(_teachUiTarget));
+        else if (_teachCam != null)
+            sp = _teachCam.WorldToScreenPoint(_teachWorld);
+        else return;
+
         Vector2 local;
-        RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            _canvas.transform as RectTransform, sp, null, out local);
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRT0, sp, null, out local);
         _teachMarker.GetComponent<RectTransform>().anchoredPosition = local;
+        UpdateMarkerLabel(local, canvasRT0);
     }
+
+    /// <summary>
+    /// Keep the caption on screen and clear of what it is labelling.
+    ///
+    /// Both axes needed fixing. Vertically: the HUD elements live in the top ~100px, so a label
+    /// pinned above the ring rendered off-screen entirely. Horizontally: the reveal counter and
+    /// the star row sit hard against the right and left edges, and a 520-wide label centred on
+    /// them ran off the side — sizing the label to its text is what actually solved that.
+    /// </summary>
+    private void UpdateMarkerLabel(Vector2 markerLocal, RectTransform canvasRT)
+    {
+        if (_teachMarkerLabel == null) return;
+
+        float halfH = canvasRT.rect.height * 0.5f;
+        float halfW = canvasRT.rect.width * 0.5f;
+
+        // Sits below the ring's own edge, so it scales with the ring rather than being a constant.
+        float drop = _teachMarkerSize * 0.5f + 70f;
+        bool nearTop = markerLocal.y > halfH - 240f;
+        float y = nearTop ? -drop : drop;
+
+        // Slide the label back inside the canvas only if it would genuinely clip.
+        float labelHalf = _teachMarkerLabel.rectTransform.rect.width * 0.5f;
+        float maxX = Mathf.Max(0f, halfW - labelHalf - 12f);
+        float x = Mathf.Clamp(markerLocal.x, -maxX, maxX) - markerLocal.x;
+
+        _teachMarkerLabel.rectTransform.anchoredPosition = new Vector2(x, y);
+    }
+
+    /// <summary>
+    /// Point the explainer at a piece of the HUD instead of something in the maze. Used by the
+    /// tutorial to introduce the clock, the reveal counter and the star row — telling a player
+    /// they are on a timer is useless if they don't know which number is the timer.
+    /// </summary>
+    /// <param name="markerSize">Ring diameter. Text rects are far larger than the glyphs inside
+    /// them, so this is sized to what the player actually sees, per target.</param>
+    public void ShowTeachCardAtUI(string title, string body, Color accent, Color swatch,
+                                  System.Action onClosed, RectTransform uiTarget, string markerLabel,
+                                  float markerSize = 190f, RectTransform uiTarget2 = null)
+    {
+        _pendingUiTarget = uiTarget;   // consumed by ShowTeachCard, so it can't leak to the next card
+        _pendingUiTarget2 = uiTarget2;
+        _pendingMarkerSize = markerSize;
+        ShowTeachCard(title, body, accent, swatch, onClosed, null, default(Vector3), markerLabel);
+    }
+
+    private RectTransform _pendingUiTarget, _pendingUiTarget2;
+    private float _pendingMarkerSize = 190f;
+    private float _teachMarkerSize = 190f;
 
     // ---------- daily result ----------
 
@@ -1515,13 +1650,4 @@ public class UIManager : MonoBehaviour
         _dailyResultPanel.SetActive(true);
     }
 
-    public void SetHintText(string s) { if (_hintText != null) _hintText.text = s; }
-
-    private GameObject BuildHint()
-    {
-        _hintText = Text_("Hint", _safe, new Vector2(0.5f, 0.5f), new Vector2(0, -300), new Vector2(1000, 120), 48, TextAnchor.MiddleCenter, "DRAG to move   •   TAP to ping");
-        _hintText.color = new Color(0.75f, 0.9f, 1f, 0.9f);
-        _hintText.gameObject.SetActive(false);
-        return _hintText.gameObject;
-    }
 }

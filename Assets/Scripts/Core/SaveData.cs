@@ -1,14 +1,13 @@
 using UnityEngine;
 
 /// <summary>
-/// Thin PlayerPrefs wrapper for persistence: best score, best streak, per-level star
-/// records, and the one-time "how to play" hint flag. Setters return true when a new
-/// record was set, so the UI can fire a "NEW BEST!" callout.
+/// Thin PlayerPrefs wrapper for persistence: the level to resume on, the consecutive-day
+/// streak, Daily Maze state, the settings toggles, and the one-time flags for the tutorial
+/// and each mechanic explainer. Every setter commits immediately.
 /// </summary>
 public static class SaveData
 {
-    private const string KBestScore  = "em_best_score";
-    private const string KBestStreak = "em_best_streak";
+    private const string KCurLevel   = "em_cur_level";    // level to resume on next launch
     private const string KHintSeen   = "em_hint_seen";
     private const string KDayStreak  = "em_day_streak";
     private const string KLastDay    = "em_last_day";   // UTC day number of the last session
@@ -22,30 +21,21 @@ public static class SaveData
     private const string KTaughtDecoy= "em_taught_decoy";  // seen the decoy explainer
     private const string KTaughtExit = "em_taught_exit";   // seen the moving-exit explainer
 
-    public static int BestScore => PlayerPrefs.GetInt(KBestScore, 0);
-    public static int BestStreak => PlayerPrefs.GetInt(KBestStreak, 0);
-
-    // PlayerPrefs.Save() writes the file synchronously. The level-clear path used to call it
-    // three times in a row, which is three blocking disk writes during the celebration — exactly
-    // when the game should feel smoothest. Setters now only stage the value; Flush() commits once.
-    /// <summary>Record a score. Returns true if it beat the previous best. Call Flush() after.</summary>
-    public static bool TrySetBestScore(int score)
+    /// <summary>
+    /// The level to resume on. This is a puzzle game, not an endless runner: quitting on level 24
+    /// and coming back to level 1 throws away everything the player built up. They resume exactly
+    /// where they were — on a freshly generated layout, so it is the same challenge rather than
+    /// the same maze memorised.
+    /// </summary>
+    public static int CurrentLevel
     {
-        if (score <= BestScore) return false;
-        PlayerPrefs.SetInt(KBestScore, score);
-        return true;
+        get { return Mathf.Max(1, PlayerPrefs.GetInt(KCurLevel, 1)); }
+        set { PlayerPrefs.SetInt(KCurLevel, Mathf.Max(1, value)); PlayerPrefs.Save(); }
     }
 
-    /// <summary>Record a streak length. Returns true if it beat the previous best. Call Flush() after.</summary>
-    public static bool TrySetBestStreak(int streak)
-    {
-        if (streak <= BestStreak) return false;
-        PlayerPrefs.SetInt(KBestStreak, streak);
-        return true;
-    }
-
-    /// <summary>Commit staged records to disk. One write instead of several.</summary>
-    public static void Flush() => PlayerPrefs.Save();
+    // No "best level" record any more. There is no level select and no way back, so the level
+    // you are on IS the deepest you have reached — a separate best would always equal it. Flush()
+    // went with it: every remaining setter commits on write, so there is nothing left to batch.
 
     // ---- Daily streak ----------------------------------------------------------------
     // "Come back tomorrow" is the strongest retention hook we can add without a backend.
@@ -85,14 +75,16 @@ public static class SaveData
     /// <summary>Has today's daily maze already been completed? (One attempt per day.)</summary>
     public static bool DailyDone => PlayerPrefs.GetInt(KDailyDone, -1) == TodayNumber;
 
+    /// <summary>Most stars ever carried out of a daily clear. Higher is better, so it still reads
+    /// as a personal best now that it counts lives rather than points.</summary>
     public static int DailyBest => PlayerPrefs.GetInt(KDailyBest, 0);
 
     /// <summary>Mark today's daily finished. Returns true if it was also a personal daily best.</summary>
-    public static bool CompleteDaily(int score)
+    public static bool CompleteDaily(int starsLeft)
     {
         PlayerPrefs.SetInt(KDailyDone, TodayNumber);
-        bool best = score > DailyBest;
-        if (best) PlayerPrefs.SetInt(KDailyBest, score);
+        bool best = starsLeft > DailyBest;
+        if (best) PlayerPrefs.SetInt(KDailyBest, starsLeft);
         PlayerPrefs.Save();
         return best;
     }
@@ -111,22 +103,23 @@ public static class SaveData
         PlayerPrefs.Save();
     }
 
+#if UNITY_EDITOR
     /// <summary>
-    /// Wipe onboarding state so the player is treated as brand new: the tutorial replays and the
-    /// Daily Maze re-locks. Used when someone resets progress before they have played past the
-    /// tutorial level — at that point they have learned nothing worth preserving.
+    /// Editor-only: wipe onboarding so the next play is treated as a brand new install — the
+    /// tutorial replays and every explainer fires again. The only way to re-test onboarding
+    /// without hand-editing PlayerPrefs. Compiled out of player builds.
     /// </summary>
     public static void ResetOnboarding()
     {
         PlayerPrefs.SetInt(KHintSeen, 0);
         PlayerPrefs.SetInt(KRunFinished, 0);
-        // The mechanic explainers are onboarding too: someone starting over from nothing has
-        // to meet the orb and the decoys again as if for the first time.
         PlayerPrefs.SetInt(KTaughtOrb, 0);
         PlayerPrefs.SetInt(KTaughtDecoy, 0);
         PlayerPrefs.SetInt(KTaughtExit, 0);
+        PlayerPrefs.SetInt(KCurLevel, 1);
         PlayerPrefs.Save();
     }
+#endif
 
     // ---- One-time mechanic explainers -------------------------------------------------
     // Playtesters met the gold orb and the decoys with no idea what either was: the orb was
@@ -172,38 +165,7 @@ public static class SaveData
         Haptics.Enabled = HapticsOn;
     }
 
-    /// <summary>
-    /// Clear per-level star records and the day-streak counter.
-    ///
-    /// Deliberately PRESERVED:
-    ///  - best score / best streak — lifetime achievements the player earned
-    ///  - the tutorial + explainer flags — nobody wants to be re-taught what they already know
-    ///  - today's daily completion — otherwise resetting would let you re-farm the daily
-    ///  - sound / vibration settings
-    /// </summary>
-    public static void ResetProgress()
-    {
-        // Snapshot everything that must survive.
-        bool sound = SoundOn, haptics = HapticsOn, hint = HintSeen, runDone = RunFinished;
-        bool taughtOrb = TaughtOrb, taughtDecoy = TaughtDecoy, taughtExit = TaughtMovingExit;
-        int bestScore = BestScore, bestStreak = BestStreak;
-        int dailyDone = PlayerPrefs.GetInt(KDailyDone, -1);
-        int dailyBest = DailyBest;
-
-        PlayerPrefs.DeleteAll();
-
-        PlayerPrefs.SetInt(KSound, sound ? 1 : 0);
-        PlayerPrefs.SetInt(KHaptics, haptics ? 1 : 0);
-        PlayerPrefs.SetInt(KHintSeen, hint ? 1 : 0);
-        PlayerPrefs.SetInt(KRunFinished, runDone ? 1 : 0);
-        PlayerPrefs.SetInt(KTaughtOrb, taughtOrb ? 1 : 0);
-        PlayerPrefs.SetInt(KTaughtDecoy, taughtDecoy ? 1 : 0);
-        PlayerPrefs.SetInt(KTaughtExit, taughtExit ? 1 : 0);
-        PlayerPrefs.SetInt(KBestScore, bestScore);
-        PlayerPrefs.SetInt(KBestStreak, bestStreak);
-        PlayerPrefs.SetInt(KDailyDone, dailyDone);
-        PlayerPrefs.SetInt(KDailyBest, dailyBest);
-        PlayerPrefs.Save();
-        ApplySettings();
-    }
+    // ResetProgress() was removed along with the settings button that called it. In a level-based
+    // game the level you reached IS the progress, so a "wipe my save" action has no upside left to
+    // offer — it can only take away the one thing the player is accumulating.
 }

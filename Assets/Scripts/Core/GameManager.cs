@@ -34,11 +34,9 @@ public class GameManager : MonoBehaviour
 
     // Progress.
     private int _level = 1;
-    private int _score;
+    private int _stars;        // lives for THIS level: 3 at the start, 0 fails it
     private int _pings, _pingsStart;
     private int _failStreak;   // consecutive fails on the current level (rubber-banding)
-    private int _streak;       // consecutive clears with pings to spare
-    private float _streakMul = 1f;
 
     // Level state.
     private MazeData _maze;
@@ -69,6 +67,8 @@ public class GameManager : MonoBehaviour
 
     // Daily streak (set once at StartGame).
     private int _dayStreak;
+    /// <summary>Armed when a run begins; the next level built spends the consecutive-day reveals.</summary>
+    private bool _dailyBonusPending;
     private bool _isDaily;
     private TutorialController _tutorial;
 
@@ -149,31 +149,10 @@ public class GameManager : MonoBehaviour
         _ui.OnPlay = BeginEndlessRun;
         _ui.OnDaily = BeginDailyRun;
         _ui.OnDailyResultClosed = ReturnToMenu;
-        _ui.OnProgressReset = OnProgressReset;
+        _ui.OnResetLevel = ResetLevel;
+        _ui.OnHome = GoHome;
+        _ui.Audio = _audio;     // lets the UI layer make noise without reaching for a singleton
 
-        ReturnToMenu();
-    }
-
-    /// <summary>
-    /// Progress was wiped from the settings panel. Abandon whatever run is in flight and go back
-    /// to a clean menu — continuing on level 14 with an empty save makes no sense.
-    /// </summary>
-    private void OnProgressReset()
-    {
-        // Resetting while still on the tutorial level means the player never really played, so
-        // onboarding restarts: the tutorial replays and the Daily Maze re-locks.
-        //
-        // Getting to level 2 or beyond proves the opposite — they cleared a maze under the clock,
-        // which is exactly what the Daily lock is there to check for. Resetting from there GRANTS
-        // the unlock rather than merely preserving it, so a reset never costs them access.
-        if (_level <= 1 || State == GameState.Tutorial) SaveData.ResetOnboarding();
-        else SaveData.MarkRunFinished();
-
-        StopAllCoroutines();      // cancel any celebration / fail sequence mid-flight
-        Time.timeScale = 1f;      // ...which may have left time frozen
-        _ui.HideCelebration();
-        _ui.HideNewBest();
-        _ui.SetCover(0f);
         ReturnToMenu();
     }
 
@@ -182,26 +161,35 @@ public class GameManager : MonoBehaviour
         if (_tutorial != null) _tutorial.Hide();   // never let the tutorial overlay sit on the menu
         _ui.HideTeachCard();                       // nor an explainer from the run we just left
         _isDaily = false;
-        _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
+        _failStreak = 0;
+        _level = SaveData.CurrentLevel;     // the menu previews where they'll pick up
         _dayStreak = SaveData.DayStreak;
 
         BuildLevel(_level);                 // something alive behind the menu
         State = GameState.Start;
-        _ui.ShowStart(SaveData.BestScore, SaveData.BestStreak, _dayStreak,
-                      SaveData.DailyDone, SaveData.RunFinished);
+        _ui.ShowStart(_level, _dayStreak, SaveData.DailyDone, SaveData.RunFinished);
     }
 
     /// <summary>Normal endless progression.</summary>
     private void BeginEndlessRun()
     {
         _isDaily = false;
-        _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
-        _dayStreak = SaveData.RegisterDailyVisit();   // opening the game counts toward the streak
+        _failStreak = 0;
+        _level = SaveData.CurrentLevel;              // resume, don't restart
+        _dayStreak = SaveData.RegisterDailyVisit();  // opening the game counts toward the streak
+        _dailyBonusPending = true;                   // spent by the first level this session builds
 
         BuildLevel(_level);
         _ui.HideStart();
         State = _tutorial != null && _tutorial.ShouldRun ? GameState.Tutorial : GameState.Playing;
-        if (State == GameState.Tutorial) _tutorial.Begin(this, _ui, _player);
+        if (State == GameState.Tutorial)
+        {
+            // Hide RETRY/settings for the duration. ResetLevel refuses to run in the Tutorial
+            // state, so leaving the button on screen just gives a first-time player something
+            // that visibly does nothing when tapped.
+            _ui.ShowInGameGear(false);
+            _tutorial.Begin(this, _ui, _player);
+        }
         else MaybeTeachLevel();
     }
 
@@ -213,7 +201,7 @@ public class GameManager : MonoBehaviour
     private void BeginDailyRun()
     {
         _isDaily = true;
-        _level = 1; _score = 0; _streak = 0; _streakMul = 1f; _failStreak = 0;
+        _level = 1; _failStreak = 0;      // the daily is always one standalone maze
         _dayStreak = SaveData.RegisterDailyVisit();
 
         BuildLevel(_level);
@@ -257,7 +245,16 @@ public class GameManager : MonoBehaviour
         PlaceBonusOrb();
 
         // Daily-streak reward: extra reveals on your first level of the day.
-        int dailyBonus = level == 1 ? Mathf.Min(GameConfig.DailyBonusPingsMax, Mathf.Max(0, _dayStreak - 1)) : 0;
+        // Keyed to the first level of a SESSION, not to level 1.
+        //
+        // This used to read `level == 1`, which was correct when every run started there. Once
+        // progress began persisting, a returning player resumed on level 24 and never saw level 1
+        // again — so the reward for playing on consecutive days silently became unreachable for
+        // everyone past their first session. The streak still counted; it just paid nothing.
+        int dailyBonus = _dailyBonusPending
+            ? Mathf.Min(GameConfig.DailyBonusPingsMax, Mathf.Max(0, _dayStreak - 1))
+            : 0;
+        _dailyBonusPending = false;
         _pingsStart = _profile.pings + dailyBonus;
         _pings = _pingsStart;
         _ui.BuildPingDots(_pingsStart);
@@ -271,8 +268,9 @@ public class GameManager : MonoBehaviour
             _ui.SetSector(GameConfig.SectorName(level), GameConfig.LevelInSector(level),
                           GameConfig.LevelsPerSector, sectorColor);
         }
-        _ui.SetScoreImmediate(_score);
-        _ui.SetStreak(_streak, _streakMul);
+        // Stars are per-level lives, so every level — including a retry — starts at full health.
+        _stars = GameConfig.StartStars;
+        _ui.SetStars(_stars, GameConfig.MaxStars);
 
         // Announce a new sector as you enter it.
         if (!_isDaily && GameConfig.LevelInSector(level) == 1 && level > 1)
@@ -280,11 +278,13 @@ public class GameManager : MonoBehaviour
                            sectorColor, 1.3f);
 
         _levelTimer = _profile.timeLimit;
+        // Push the clock to the HUD immediately. It used to be written only from TickPlaying, so
+        // during the tutorial — where TickPlaying never runs — the "THE CLOCK" card pointed at a
+        // readout still showing the previous level's value, or nothing at all.
+        _ui.SetTimer(_profile.timeLimit > 0f ? Mathf.CeilToInt(_profile.timeLimit) : -1);
         _pingReadyTime = 0f;
         _lastTickSecond = int.MaxValue;
         FitCamera(_maze);
-
-        _ui.HideHint(); // onboarding is handled by TutorialController now
     }
 
     /// <summary>
@@ -343,13 +343,26 @@ public class GameManager : MonoBehaviour
         _orbActive = false;
         _orbSR.gameObject.SetActive(false);
 
-        _score += GameConfig.BonusOrbScore;
-        _ui.RollScoreTo(_score);
-        _ui.ShowBanner("+" + GameConfig.BonusOrbScore + "  ECHO", GameConfig.BonusOrbColor, 0.5f);
+        // Restores a life rather than paying points. At full stars there is nothing to restore,
+        // so it reads as a near-miss — deliberately: capping it is what stops a lucky echo from
+        // simply cancelling out the decoys on a level you were already clearing cleanly.
+        bool healed = _stars < GameConfig.MaxStars;
+        if (healed)
+        {
+            _stars = Mathf.Min(GameConfig.MaxStars, _stars + GameConfig.BonusOrbStars);
+            _ui.SetStars(_stars, GameConfig.MaxStars);
+            _ui.ShowBanner("BONUS ECHO\n+1 STAR", GameConfig.BonusOrbColor, 0.7f);
+            _audio.PlayStarGained();
+        }
+        else
+        {
+            _ui.ShowBanner("BONUS ECHO\nALREADY FULL", GameConfig.BonusOrbColor, 0.7f);
+            _audio.PlayStar(2);
+        }
+
         _ui.FlashColor(GameConfig.BonusOrbColor, 0.3f);
         _fx.PlayExitBurst(_orbPos);
-        _audio.PlayStar(2);
-        Haptics.Medium();
+        Haptics.Success();
     }
 
     private void PlaceDecoys(int count)
@@ -372,9 +385,20 @@ public class GameManager : MonoBehaviour
         int slots = Mathf.Min(count, GameConfig.MaxDecoys);
 
         int placed = 0;
+        int lastIdx = -1;
         for (int k = 1; k <= slots; k++)
         {
             int idx = Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(lo, hi, k / (float)(slots + 1))), lo, hi);
+
+            // Never stack two decoys in one cell. On a short solution path the even spacing
+            // rounds several slots onto the same index — with a path of 8 cells and 5 decoys the
+            // indices come out 3,3,4,5,5. Two decoys sharing a cell used to be cosmetic; now that
+            // a hit costs a life it is a trap: you lose a star, rewind, and the twin is still
+            // sitting there waiting to take the next one.
+            if (idx <= lastIdx) idx = lastIdx + 1;
+            if (idx > hi) break;                    // ran out of room — fewer decoys, not stacked ones
+            lastIdx = idx;
+
             var cell = path[idx];
             Vector2 pos = _maze.CellCenter(cell.x, cell.y);
 
@@ -402,7 +426,8 @@ public class GameManager : MonoBehaviour
     {
         if (State != GameState.Tutorial) return;
         State = GameState.Playing;
-        MaybeTeachLevel();   // level 1 may still have an orb to introduce
+        _ui.ShowInGameGear(true);   // hidden while the tutorial ran; the buttons work from here
+        MaybeTeachLevel();          // level 1 may still have an orb to introduce
     }
 
     /// <summary>The exit's current world position — the tutorial points its marker here.</summary>
@@ -434,9 +459,9 @@ public class GameManager : MonoBehaviour
             _ui.ShowTeachCard(
                 "DECOYS",
                 "These pulse in and out along your route.\n\n" +
-                "Touch one while it is <b>solid</b> and you are thrown back " +
-                Mathf.RoundToInt(GameConfig.RewindSeconds) + " seconds.\n\n" +
-                "Wait for it to fade, then slip past.",
+                "Touch one while it is <b>solid</b> and it costs you <b>a star</b> and " +
+                Mathf.RoundToInt(GameConfig.DecoyTimePenalty) + " seconds.\n\n" +
+                "Lose all three stars and the level restarts.",
                 UIManager.Danger, GameConfig.DecoyColor, null);
             return;
         }
@@ -461,8 +486,7 @@ public class GameManager : MonoBehaviour
             _ui.ShowTeachCard(
                 "BONUS ECHO",
                 "One is hidden in a dead end of this maze.\n\n" +
-                "Only a ping reveals it. Reach it for <b>+" +
-                GameConfig.BonusOrbScore + "</b>.",
+                "Only a ping reveals it. Reach it and you get <b>a star back</b>.",
                 UIManager.Gold, GameConfig.BonusOrbColor, null);
         }
     }
@@ -547,12 +571,20 @@ public class GameManager : MonoBehaviour
                 _lastTickSecond = secs;
             }
 
-            if (_levelTimer <= 0f) { StartCoroutine(FailRoutine()); return; }
+            if (_levelTimer <= 0f) { StartCoroutine(FailRoutine(FailCause.Timeout)); return; }
         }
         else _ui.SetTimer(-1);
 
         UpdateMovingExit();
         UpdateDecoys();
+
+        // UpdateDecoys can end the level outright (last star lost), and a coroutine runs up to
+        // its first yield synchronously — so State is already Celebrating by the time we get
+        // here. Without this the same frame could also start WinRoutine and run a win and a fail
+        // at once. Not currently reachable (decoys are never placed within reach of the exit),
+        // but the cost of the check is nothing and the failure mode is incoherent.
+        if (State != GameState.Playing) return;
+
         UpdateBonusOrb();
         PulseExit();
 
@@ -642,16 +674,31 @@ public class GameManager : MonoBehaviour
 
     private void HitDecoy(int i)
     {
-        // Penalty: freeze time, wipe the reveal, and rewind the dot back its own path.
-        // Kept gentle — soft flash, medium haptic, small shake — so it doesn't feel harsh.
-        _audio.PlayWrong();                  // collision "thunk" the instant you touch it
+        // A decoy now costs a life AND time, on top of the rewind. It used to cost only position,
+        // which players read as a mild inconvenience — there was no reason to time a crossing when
+        // barging through cost you a couple of seconds you probably had spare.
+        _stars = Mathf.Max(0, _stars - GameConfig.DecoyStarCost);
+        _levelTimer -= GameConfig.DecoyTimePenalty;
+        _ui.SetStars(_stars, GameConfig.MaxStars);
+        _ui.PulseStarLost();
+
+        _audio.PlayStarLost();               // distinct from the generic "wrong" — a life went
         Haptics.Wrong();                     // the platform's "error" pattern: unmistakably bad
-        _ui.FlashColor(new Color(0.4f, 0.8f, 1f, 1f), 0.25f);
+        _ui.FlashColor(GameConfig.DecoyColor, 0.3f);
+        _fx.PlayDecoyPop(_decoyPos[i]);
+        _shakeTimer = Mathf.Max(_shakeTimer, 0.18f);
+        _decoyHideUntil[i] = Time.time + 4f;
+
+        // Out of lives ends the level there and then — no rewind, because there is nothing left
+        // to rewind into.
+        if (_stars <= 0)
+        {
+            StartCoroutine(FailRoutine(FailCause.NoStars));
+            return;
+        }
+
         _ui.ShowRewind();
         _ui.PlayRewindEffect();
-        _fx.PlayDecoyPop(_decoyPos[i]);
-        _shakeTimer = Mathf.Max(_shakeTimer, 0.12f);
-        _decoyHideUntil[i] = Time.time + 4f;
         _player.TriggerRewind();             // plays the rewind sound + retrace + reveal wipe
     }
 
@@ -678,43 +725,18 @@ public class GameManager : MonoBehaviour
     {
         State = GameState.Celebrating;
 
-        // ---- Score + records ----
-        int timeBonus = _profile.timeLimit > 0f ? Mathf.RoundToInt(Mathf.Max(0f, _levelTimer) * GameConfig.ScorePerSecond) : 0;
-
-        // Stars first — they now decide the streak, so they have to be known before it is updated.
-        float frac = _pingsStart > 0 ? (float)_pings / _pingsStart : 0f;
-        int stars = 1;
-        if (frac >= GameConfig.Star2PingFrac) stars = 2;
-        if (frac >= GameConfig.Star3PingFrac) stars = 3;
-
-        // A streak now means "a run of near-perfect clears". Anything under 3 stars ends it, so the
-        // multiplier is something you can lose by playing sloppily, not just by running out of time.
-        int prevStreak = _streak;
-        float earnedMul = _streakMul;                // the multiplier this clear was played under
-        bool keptSpare = stars >= GameConfig.StreakStarRequirement;
-        if (keptSpare) _streak++;
-        else _streak = 0;
-        _streakMul = Mathf.Min(GameConfig.MaxStreakMultiplier, 1f + _streak * GameConfig.StreakStep);
-
-        // Losing the streak does NOT also void the multiplier on the level you just cleared —
-        // you keep what you had earned up to here, and only the future is reset.
-        bool streakLost = prevStreak > 0 && !keptSpare;
-        float scoreMul = keptSpare ? _streakMul : earnedMul;
-
-        // Clutch: finishing with almost no time left is the most exciting way to win, so it pays.
+        // The stars you WALK OUT WITH are the result now — not a rating computed from leftover
+        // pings. Nothing to calculate: what survived the decoys is what you get.
+        int starsLeft = _stars;
         bool clutch = _profile.timeLimit > 0f && _levelTimer <= GameConfig.ClutchSeconds;
         bool sectorDone = GameConfig.IsSectorFinale(_level);
 
-        int extras = (clutch ? GameConfig.ClutchBonus : 0) + (sectorDone ? GameConfig.SectorClearBonus : 0);
-        int gained = Mathf.RoundToInt((GameConfig.ScoreBaseClear + _pings * GameConfig.ScorePerPing + timeBonus + extras) * scoreMul);
-        int newScore = _score + gained;
-
-        bool newBestScore = SaveData.TrySetBestScore(newScore);
-        bool newBestStreak = SaveData.TrySetBestStreak(Mathf.Max(_streak, prevStreak));
-        if (newBestScore || newBestStreak) SaveData.Flush();   // one disk write, only when needed
-
         // ---- Immediate impact ----
-        _audio.PlayWin();
+        // Your own ping, coming back. The cue that used to be here was a C5-E5-G5-C6 arpeggio and
+        // the praise sting 0.4s later also climbs from C5 — two ascending arpeggios that close
+        // together read as one sound stuttering rather than two events. This one is a gesture
+        // rather than a tune, so the sting can answer it cleanly.
+        _audio.PlayExitReached();
         Haptics.Success();
         _fx.PlayExitBurst(_exitWorld);
         _ui.Flash(0.7f);
@@ -734,51 +756,44 @@ public class GameManager : MonoBehaviour
         // The Daily is one standalone maze, so "LEVEL 1 CLEAR" is meaningless there — and its
         // title must win over the sector/clutch variants, which belong to the endless run.
         if (_isDaily)
-            _ui.SetCelebrationTitle("DAILY MAZE\nCLEAR", new Color(1f, 0.85f, 0.4f, 1f));
+            _ui.SetCelebrationTitle("DAILY MAZE\nCLEAR", UIManager.Gold);
         else if (sectorDone)
             _ui.SetCelebrationTitle("SECTOR CLEAR\n" + GameConfig.SectorName(_level), GameConfig.SectorWallColor(_level));
         else if (clutch)
-            _ui.SetCelebrationTitle("CLUTCH CLEAR!", new Color(1f, 0.85f, 0.3f, 1f));
+            _ui.SetCelebrationTitle("CLUTCH CLEAR!", UIManager.Gold);
 
-        _ui.SetStreak(_streak, _streakMul);
-        _score = newScore;
-        _ui.RollScoreTo(newScore);
+        // Point at the next milestone the moment the current one is banked. On a sector finale
+        // the title already carries the news; otherwise, once the next sector is close enough to
+        // be worth chasing, name it. Left blank further out so it stays an event rather than a
+        // permanent readout the eye stops seeing.
+        int nextLevel = _level + 1;
+        int toNext = GameConfig.LevelsToNextSector(nextLevel);
+        _ui.SetCelebrationScoreLine(
+            _isDaily || sectorDone || toNext > 2
+                ? ""
+                : GameConfig.NextSectorName(nextLevel) + "   in   " + toNext);
 
-        // Score line spells out the bonuses that made up this clear.
-        string line = "+" + gained;
-        if (scoreMul > 1f) line += "   x" + scoreMul.ToString("0.0");
-        if (clutch) line += "\nCLUTCH +" + GameConfig.ClutchBonus;
-        if (sectorDone) line += "\nSECTOR +" + GameConfig.SectorClearBonus;
-        _ui.SetCelebrationScoreLine(line);
+        // A beat of silence, then the praise word lands. The gap matters: slamming it in on the
+        // same frame as the title makes both read as one blob of text instead of a payoff.
+        yield return new WaitForSecondsRealtime(0.26f);
+        _ui.ShowPraise(GameConfig.PraiseFor(starsLeft),
+                       starsLeft >= GameConfig.MaxStars ? UIManager.Gold : UIManager.Accent);
+        _audio.PlayPraise(starsLeft);
+        Haptics.Success();
+        _ui.Flash(0.25f);
+        _shakeTimer = Mathf.Max(_shakeTimer, 0.14f);
 
-        // Stars pop in one-by-one with a haptic tap each.
-        for (int i = 0; i < stars; i++)
-        {
-            yield return new WaitForSecondsRealtime(0.22f);
-            _ui.PopStar(i);
-            _audio.PlayStar(i);
-            Haptics.Medium();
-        }
-
-        if (keptSpare) _audio.PlayStreak(_streak);
-        else if (streakLost)
-        {
-            // Played after the stars so the player sees WHY it broke, then watches it go.
-            yield return new WaitForSecondsRealtime(0.25f);
-            _ui.ShowStreakLost(prevStreak, earnedMul);
-            _audio.PlayWrong();
-            Haptics.Wrong();
-        }
-        if (newBestScore || newBestStreak) _ui.ShowNewBest();
+        // No "new best" callout here. The player can only ever be ON their deepest level —
+        // there is no level select and no way back — so every single clear would trigger it,
+        // which makes it noise rather than an achievement.
 
         // The daily is a single maze, not a run — finish it and show its own result screen.
         if (_isDaily)
         {
             yield return new WaitForSecondsRealtime(GameConfig.CelebrationTime);
-            bool dailyBest = SaveData.CompleteDaily(newScore);
+            bool dailyBest = SaveData.CompleteDaily(starsLeft);
             _ui.HideCelebration();
-            _ui.HideNewBest();
-            _ui.ShowDailyResult(true, newScore, _dayStreak, dailyBest);
+            _ui.ShowDailyResult(true, starsLeft, _dayStreak, dailyBest);
             State = GameState.Start;   // menu buttons take over again via OnDailyResultClosed
             yield break;
         }
@@ -791,28 +806,32 @@ public class GameManager : MonoBehaviour
 
         _failStreak = 0;
         _level++;
+        SaveData.CurrentLevel = _level;                     // resume point if they quit here
         BuildLevel(_level);                                 // camera + player swap, hidden by the cover
         _ui.HideCelebration();
-        _ui.HideNewBest();
         State = GameState.Playing;
 
         _ui.SetCover(0f);                                   // fade back in on the fresh level
         MaybeTeachLevel();                                  // ...and introduce anything new on it
     }
 
+    /// <summary>Why a level ended — the banner says which, since the fix differs.</summary>
+    private enum FailCause { Timeout, NoStars }
+
     /// <summary>
-    /// Timeout. Rather than cutting straight to a retry, the whole maze lights up and we show how
-    /// close the exit actually was. Seeing "you were 2 tiles away" is what turns a failure into an
-    /// instant retry instead of a quit — a near miss fires the same reward circuitry as a win.
+    /// Level failed. The maze lights up first so the player sees how close the exit actually was:
+    /// "you were 2 tiles away" turns a failure into an instant retry instead of a quit.
+    ///
+    /// This retries the SAME level. The old behaviour dumped the player back to level 1, which
+    /// made sense when a score run was the unit of play — it is exactly wrong for a ladder of
+    /// puzzles, where losing level 24 and restarting at 1 discards an hour of real progress.
     /// </summary>
-    private IEnumerator FailRoutine()
+    private IEnumerator FailRoutine(FailCause cause)
     {
         State = GameState.Celebrating;      // reuse the "cutscene" state: input + ticking are off
 
         _failStreak++;
-        _streak = 0; _streakMul = 1f;       // streak breaks on a timer fail
-        if (!_isDaily) SaveData.MarkRunFinished();   // first full run unlocks the Daily Maze
-        _ui.SetStreak(0, 1f);
+        if (!_isDaily) SaveData.MarkRunFinished();   // finishing a level unlocks the Daily Maze
         _ui.Flash(0.35f);
         Haptics.Heavy();
         _audio.PlayLose();
@@ -822,30 +841,64 @@ public class GameManager : MonoBehaviour
         _sonar.RevealAll(playerPos, GameConfig.FailRevealTime);
 
         int tiles = Mathf.Max(1, Mathf.RoundToInt(Vector2.Distance(playerPos, _exitWorld) / GameConfig.CellSize));
-        string line = tiles <= 2 ? "SO CLOSE!\n" + tiles + (tiles == 1 ? " tile away" : " tiles away")
-                                 : "OUT OF TIME\n" + tiles + " tiles away";
-        if (!_isDaily) line += "\nRUN OVER  ·  LEVEL " + _level;
-        _ui.ShowBanner(line, new Color(1f, 0.55f, 0.5f, 1f), GameConfig.FailRevealTime * 0.6f);
+        string head = cause == FailCause.NoStars ? "OUT OF STARS" : "OUT OF TIME";
+        string line = tiles <= 2
+            ? "SO CLOSE!\n" + tiles + (tiles == 1 ? " tile away" : " tiles away")
+            : head + "\n" + tiles + " tiles away";
+        if (!_isDaily) line += "\nRETRY LEVEL " + _level;
+        _ui.ShowBanner(line, UIManager.Danger, GameConfig.FailRevealTime * 0.6f);
 
         yield return new WaitForSecondsRealtime(GameConfig.FailRevealTime);
 
-        // The daily allows one attempt — running out of time ends it.
+        // The daily allows one attempt — failing ends it.
         if (_isDaily)
         {
-            SaveData.CompleteDaily(_score);
-            _ui.ShowDailyResult(false, _score, _dayStreak, false);
+            SaveData.CompleteDaily(0);
+            _ui.ShowDailyResult(false, 0, _dayStreak, false);
             State = GameState.Start;
             yield break;
         }
 
-        // Running out of time ends the RUN, not just the level. Retrying the same level would make
-        // the streak and the score meaningless — you could grind a single level until it fell.
-        // Harsh, but it is what makes "how deep did you get" worth anything.
+        // Same level, brand new layout — the challenge repeats, the solution doesn't.
         _ui.SetCover(1f);
         yield return new WaitForSecondsRealtime(0.22f);
-
-        ReturnToMenu();                     // wipes level/score/streak and shows the menu
+        BuildLevel(_level);
+        State = GameState.Playing;
         _ui.SetCover(0f);
+        // The regenerated layout may contain something this player has never met — an orb only
+        // turns up on 18% of levels, so it can easily first appear on a retry rather than on the
+        // clear that would otherwise have introduced it.
+        MaybeTeachLevel();
+    }
+
+    /// <summary>
+    /// Regenerate the current level from scratch. Exposed as a button because a maze whose layout
+    /// you have half-memorised but keep dying in is a frustrating place to be stuck, and the old
+    /// escape hatch — reset ALL progress — was wildly out of proportion to the problem.
+    /// </summary>
+    public void ResetLevel()
+    {
+        if (State != GameState.Playing && State != GameState.Celebrating) return;
+        StopAllCoroutines();
+        Time.timeScale = 1f;
+        _ui.HideCelebration();
+        _ui.HideTeachCard();
+        _failStreak = 0;
+        BuildLevel(_level);
+        State = GameState.Playing;
+        _audio.PlayWhoosh();
+        Haptics.Medium();
+        MaybeTeachLevel();      // the fresh layout may introduce something new — see FailRoutine
+    }
+
+    /// <summary>Abandon the level and go back to the menu. Progress is already saved per level.</summary>
+    public void GoHome()
+    {
+        StopAllCoroutines();
+        Time.timeScale = 1f;
+        _ui.HideCelebration();
+        _ui.SetCover(0f);
+        ReturnToMenu();
     }
 
     private void FitCamera(MazeData maze)
