@@ -64,6 +64,12 @@ public class GameManager : MonoBehaviour
     private SpriteRenderer _orbSR;
     private Vector2 _orbPos;
     private bool _orbActive;
+    /// <summary>
+    /// Cells on the corridor from the start to the orb. The moving exit is forbidden from
+    /// entering these: a perfect maze has exactly one route to any cell, so the exit parking on
+    /// that route puts the orb behind the destination and makes it impossible to collect.
+    /// </summary>
+    private readonly HashSet<Vector2Int> _orbCorridor = new HashSet<Vector2Int>();
 
     // Daily streak (set once at StartGame).
     private int _dayStreak;
@@ -295,6 +301,7 @@ public class GameManager : MonoBehaviour
     private void PlaceBonusOrb()
     {
         _orbActive = false;
+        _orbCorridor.Clear();
         _orbSR.gameObject.SetActive(false);
 
         // Only dead ends reachable without crossing the exit — otherwise the orb sits "behind"
@@ -310,6 +317,15 @@ public class GameManager : MonoBehaviour
             var cell = ends[Random.Range(0, ends.Count)];
             Vector2 pos = _maze.CellCenter(cell.x, cell.y);
             if ((pos - _maze.startPos).sqrMagnitude < minDistSqr) continue;
+
+            // Record the route to it and fence the moving exit out of those cells. Placement
+            // already avoids dead ends behind the exit's STARTING cell, but from level 6 the exit
+            // drifts — and stepping onto this corridor strands the orb exactly as if it had been
+            // placed behind the exit in the first place. That is the "sometimes unreachable" case.
+            _orbCorridor.Clear();
+            var route = MazeGenerator.SolvePath(_maze.cells, _maze.size, new Vector2Int(0, 0), cell);
+            if (route != null)
+                for (int r = 0; r < route.Count; r++) _orbCorridor.Add(route[r]);
 
             _orbPos = pos;
             _orbActive = true;
@@ -619,6 +635,14 @@ public class GameManager : MonoBehaviour
         {
             _exitMoveTimer = _profile.exitMoveInterval;
             OpenNeighbors(_exitCell, _nbrScratch);
+
+            // Never drift onto the orb's corridor. Doing so seals the orb off behind the exit —
+            // the player can see it lit by a ping and simply cannot reach it, which reads as the
+            // game cheating. If every option is fenced off the exit just holds still this tick.
+            if (_orbActive && _orbCorridor.Count > 0)
+                for (int i = _nbrScratch.Count - 1; i >= 0; i--)
+                    if (_orbCorridor.Contains(_nbrScratch[i])) _nbrScratch.RemoveAt(i);
+
             if (_nbrScratch.Count > 0)
                 _exitCell = _nbrScratch[Random.Range(0, _nbrScratch.Count)];
         }

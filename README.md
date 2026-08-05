@@ -24,14 +24,16 @@ by [**Vortex Forge Studios**](https://github.com/VortexForgeStudios)
 
 The screen is black. Somewhere in that black is a maze, and somewhere in the maze is an exit.
 
-**Tap** and a sonar ring bursts out from your dot. Walls light up as the wavefront crosses them — then fade. You get a fistful of pings per level and about 45 seconds. What you actually carry to the exit is a *memory* of the layout, decaying in real time.
+**Tap** and a sonar ring bursts out from your dot. Walls light up as the wavefront crosses them — then fade. You get a handful of reveals per level and 34 seconds. What you actually carry to the exit is a *memory* of the layout, decaying in real time.
 
 Every ping is a trade: spend one to see, or trust what you think you remember and move.
 
+There is no score. The only number that matters is the level you have reached, and it is waiting for you when you come back.
+
 <div align="center">
-  <img src="docs/media/menu.png" width="240" alt="Title screen" />
-  <img src="docs/media/deep.png" width="240" alt="A 16x16 maze at level 60, revealed in amber" />
-  <img src="docs/media/clear.png" width="240" alt="Level clear with three stars" />
+  <img src="docs/media/menu.png" width="240" alt="Title screen showing the current level and the next sector" />
+  <img src="docs/media/deep.png" width="240" alt="A large maze revealed by a sonar sweep" />
+  <img src="docs/media/clear.png" width="240" alt="Level clear screen" />
 </div>
 
 ---
@@ -72,21 +74,41 @@ Because the walls are one combined mesh at identity transform, the shader's worl
 
 ---
 
+## Three stars, and they are lives
+
+You start every level with three stars. Touch a decoy and you lose one, plus two seconds off the clock. Lose all three — or run the clock out — and the level restarts on a **freshly generated layout**: the same challenge, never the same solution.
+
+Stars are not a score. They are the thing you are spending, which is what makes a decoy worth timing rather than barging through.
+
+A **bonus echo** hidden in a dead end gives one back. It only appears on 18% of levels and only a ping can find it, so every sweep carries a small "did I hit gold?" pull.
+
+---
+
 ## Progression
 
-Levels are endless. The hand-tuned ramp runs to level 13; past that a second "deep" ramp keeps every knob moving until it converges on a floor that stays hard but always winnable.
+Levels are endless and the level you reach is the only thing being tracked. Quit on 24 and you resume on 24.
 
-| Level | Grid | Pings | Time | Sector |
-|------:|-----:|------:|-----:|--------|
-| 1 | 6×6 | 9 | 45.0s | SHALLOWS |
-| 13 | 12×12 | 12 | 45.0s | DRIFT |
-| 21 | 13×13 | 13 | 46.7s | ECHO CORE |
-| 45 | 16×16 | 14 | 50.2s | SHALLOWS **II** |
-| 73+ | 16×16 | 12 | 42.5s | *(converged)* |
+| Level | Grid | Reveals | Time | Decoys | Sector |
+|------:|-----:|--------:|-----:|-------:|--------|
+| 1 | 6×6 | 7 | 34.0s | 0 | SHALLOWS |
+| 3 | 7×7 | 6 | 34.0s | 1 | SHALLOWS |
+| 5 | 8×8 | 6 | 34.0s | 2 | SHALLOWS |
+| 6 | 8×8 | 6 | 34.0s | 1 | THE DEEP |
+| 15 | 13×13 | 9 | 33.5s | 5 | DRIFT |
+| 40 | 16×16 | 11 | 35.6s | 5 | THE LATTICE |
+| 80 | 16×16 | 9 | 29.5s | 5 | THE LATTICE **II** |
 
-Extra grid rows *buy* seconds so a bigger maze stays fair; the deep ramp then claws them back. Sector names cycle through eight titles with a lap numeral appended, so a player 200 levels down still sees a name they haven't seen before.
+Reveals scale at 0.72× the grid width, so a **bigger maze means proportionally less of it you can afford to light up**.
 
-Twists layer in as you climb: **decoys** that pulse in and out and rewind you if touched, a **moving exit** that drifts between cells, and a **bonus echo orb** hidden in a dead end that only a ping can find.
+### The sawtooth
+
+Difficulty does not climb in a straight line. Pressure rises across a five-level sector, spikes on its finale, then drops at the start of the next one — look at levels 5 → 6 above, where the decoy count halves.
+
+A monotone ramp reads as "the same level, slightly worse" and never lets a player feel strong. Dropping back after a peak makes the opener play as a reward — the thing that beat you last level is now easy — and makes the next climb legible as a climb. Every trough still sits above the previous trough, so the trend is up; only the shape is a sawtooth.
+
+Sector names cycle through eight titles with a lap numeral appended, so a player 200 levels down still meets a name they have not seen. The menu names the one you are heading for and how far off it is, because *"THE HOLLOW in 3"* is a reason to keep playing and *"level 23"* is not.
+
+Twists layer in as you climb: **decoys** from level 3, a **moving exit** that drifts between cells from level 6, and the bonus echo throughout. Each is introduced by a blocking card the first time it actually appears — playtesters met the orb with no idea what it was, and read the decoy rewind as the game malfunctioning.
 
 ---
 
@@ -116,7 +138,7 @@ flowchart TD
     P --> HAP[Haptics]
 ```
 
-`GameConfig` is a single static block holding every tuning constant in the game — maze growth, sonar timing, scoring, streaks, the difficulty curve. Nothing is scattered across inspectors, and there are no ScriptableObjects to hunt through.
+`GameConfig` is a single static block holding every tuning constant in the game — maze growth, sonar timing, stars-as-lives, the difficulty sawtooth. Nothing is scattered across inspectors, and there are no ScriptableObjects to hunt through.
 
 ---
 
@@ -127,7 +149,8 @@ A surprising share of the code exists purely so the game feels good in the hand:
 - **Direct-drag movement.** The dot follows your finger's world delta every rendered frame — no physics step, no interpolation, no catch-up. Walls are resolved with a swept `CircleCast` and collide-and-slide.
 - **Swept pickups.** A fast flick can cross a whole cell in one frame, so the exit, orb and decoy tests measure the *segment travelled*, not just where you ended up.
 - **Cross-platform haptics.** `UIFeedbackGenerator` on iOS; on Android, `VibrationEffect` with two duration ladders for devices with and without amplitude control, and a busy-guard — because `vibrate()` cancels rather than queues, and firing faster than a pulse plays leaves the motor stuttering silently.
-- Hitstop, punch-zoom, screen shake, rolling score, star pops, near-miss reveal on failure.
+- **Every sound is synthesised, and the clear is composed.** Reaching the exit plays a C-major bloom that bends *up* into tune over 130ms — the sonar has been searching in the dark, and that is contact landing. The praise word that follows a beat later is an arpeggio over the same root, so the two read as one musical moment rather than two cues colliding.
+- Hitstop, punch-zoom, screen shake, a star row that flares red when a life is spent, near-miss reveal on failure.
 
 ---
 
@@ -142,15 +165,17 @@ git clone <this-repo>
 Open the project, load `Assets/Scenes/EchoMaze.unity`, press Play.
 
 **Android**
-- Min SDK 26, IL2CPP, ARM64
+- Min SDK 26, target 36, IL2CPP, ARM64, App Bundle with symbols embedded
 - `android.permission.VIBRATE` is injected by [`AndroidManifestPostProcessor.cs`](Assets/Scripts/Editor/AndroidManifestPostProcessor.cs) — Unity's manifest scanner can't see JNI vibrator calls, so without it haptics fail silently
 - Verify a build with `aapt dump permissions <apk>`
+- Gameplay haptics are filed as **`USAGE_MEDIA`**, not `USAGE_TOUCH`. The latter is governed by the system "Touch feedback" toggle, which many people switch off — filing a game's rumble under it silently disables the entire feature on those devices. Only button taps use `USAGE_TOUCH`, where obeying that setting is correct.
+- **Long-press the vibration row in Settings** to run a haptics self-test and print the platform report (SDK, activity source, vibrator source, amplitude control, attribute tier, OS setting). Haptics cannot be verified from one handset; this is how a tester reports what actually happened.
 
 **iOS**
 - The native haptics bridge lives at `Assets/Plugins/iOS/EchoMazeHaptics.mm` and is merged into the generated Xcode project automatically
 - Requires iPhone 7 or newer for haptics (`UIFeedbackGenerator` no-ops on older hardware rather than failing)
 
-> Before uploading to Google Play: switch the build to **App Bundle (.aab)**, pin `targetSdkVersion`, and configure a keystore.
+> The upload keystore lives outside the repo and is gitignored. Bump `versionCode` on every upload — Play rejects a duplicate.
 
 ---
 
@@ -161,8 +186,10 @@ Open [`GameConfig.cs`](Assets/Scripts/Core/GameConfig.cs) — three knobs move t
 | Constant | Effect |
 |---|---|
 | `FadeStart` / `FadeEnd` | How long revealed walls linger. The single biggest difficulty lever. |
-| `MoveSensitivity` | How far the dot travels per unit of finger movement. |
+| `PingBudgetScale` | Reveals as a fraction of grid width. Currently 0.72 — the scarcity that makes memory matter. |
+| `SectorRelief` / `SectorFinaleBump` | Depth of the sawtooth: how far pressure drops at a sector opener and spikes on its finale. |
 | `LevelTimeLimit` | Seconds per level. **Set to 0 or less to disable the fail timer entirely** — the code path exists for a relaxed mode. |
+| `MoveSensitivity` | How far the dot travels per unit of finger movement. |
 
 ---
 
@@ -171,12 +198,12 @@ Open [`GameConfig.cs`](Assets/Scripts/Core/GameConfig.cs) — three knobs move t
 ```
 Assets/
 ├── Scenes/EchoMaze.unity          # one GameObject: GameBootstrap
-├── Scripts/                       # 19 files, ~5.1k lines
+├── Scripts/                       # 20 files, ~6.5k lines
 │   ├── Core/                      # bootstrap, config, game loop, persistence
 │   │   ├── GameBootstrap.cs       #   builds the entire scene at runtime
-│   │   ├── GameConfig.cs          #   all tuning + the difficulty curve
-│   │   ├── GameManager.cs         #   level flow, scoring, twists, celebration
-│   │   └── SaveData.cs            #   PlayerPrefs wrapper
+│   │   ├── GameConfig.cs          #   all tuning + the difficulty sawtooth
+│   │   ├── GameManager.cs         #   level flow, stars, twists, celebration
+│   │   └── SaveData.cs            #   PlayerPrefs wrapper (resume level, daily, flags)
 │   ├── Gameplay/                  # the simulation
 │   │   ├── MazeGenerator.cs       #   recursive backtracker + solver
 │   │   ├── PlayerController.cs    #   drag movement, swept collision, rewind
@@ -184,10 +211,11 @@ Assets/
 │   │   ├── WallShaderController.cs#   combined wall mesh + colliders
 │   │   └── TutorialController.cs  #   blocking first-run tutorial
 │   ├── Presentation/              # everything the player sees and hears
-│   │   ├── UIManager.cs           #   entire HUD + menus, built in code
+│   │   ├── UIManager.cs           #   entire HUD + menus + teach cards, built in code
 │   │   ├── FxManager.cs           #   particles
 │   │   ├── ProceduralAudio.cs     #   every sound in the game
 │   │   ├── PulseGlow.cs           #   player halo
+│   │   ├── HoldToDiagnose.cs      #   long-press hook for the haptics self-test
 │   │   └── SafeArea.cs            #   notch-aware HUD
 │   ├── Platform/                  # device-facing
 │   │   ├── EchoInput.cs           #   input abstraction

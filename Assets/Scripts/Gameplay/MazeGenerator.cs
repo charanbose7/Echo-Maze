@@ -204,7 +204,11 @@ public static class MazeGenerator
     }
 
     /// <summary>BFS the (unique) start->exit path through the carved maze.</summary>
-    private static List<Vector2Int> SolvePath(int[,] cells, int size, Vector2Int start, Vector2Int exit)
+    /// <summary>
+    /// The unique route between two cells. Public because GameManager needs the corridor leading
+    /// to the bonus orb, so the drifting exit can be kept off it.
+    /// </summary>
+    public static List<Vector2Int> SolvePath(int[,] cells, int size, Vector2Int start, Vector2Int exit)
     {
         var prev = new Dictionary<Vector2Int, Vector2Int>();
         var seen = new HashSet<Vector2Int> { start };

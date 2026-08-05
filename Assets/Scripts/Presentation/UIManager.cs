@@ -1158,6 +1158,20 @@ public class UIManager : MonoBehaviour
             if (SaveData.HapticsOn) Haptics.Success();
         });
 
+        // A long-press on the vibration row runs the full ladder and prints the platform report.
+        //
+        // This exists because haptics cannot be verified from one developer handset — whether a
+        // buzz fires depends on OS version, the OEM's motor, whether it has amplitude control, and
+        // system settings the app cannot see. Any tester can now hold this row, feel six distinct
+        // pulses (or not), and send back the single log line that says which of those it was.
+        var hold = hapticBtn.gameObject.AddComponent<HoldToDiagnose>();
+        hold.OnHeld = () =>
+        {
+            Haptics.SelfTest(this);
+            ShowBanner("VIBRATION TEST\n<size=55%>" + Haptics.Status + "</size>", Accent, 4f);
+            Debug.Log("[EchoMaze] Haptics self-test: " + Haptics.Status);
+        };
+
         // RESET PROGRESS used to live here, behind a confirm step. It is gone entirely.
         //
         // It made sense when a "run" was the unit of play and your save was a score you might want
