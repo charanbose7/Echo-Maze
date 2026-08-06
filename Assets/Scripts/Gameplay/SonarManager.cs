@@ -64,7 +64,7 @@ public class SonarManager : MonoBehaviour
         _fxContainer = container.transform;
         _fxContainer.SetParent(transform, false);
 
-        var mat = new Material(Shader.Find("EchoMaze/Additive")) { name = "SonarFxMat" };
+        var mat = new Material(Shader.Find("Sonarfall/Additive")) { name = "SonarFxMat" };
 
         _rings = BuildPool("Ring", VisualUtils.Ring(), mat, 40);
         _flashes = BuildPool("Flash", VisualUtils.RadialGlow(), mat, 45);

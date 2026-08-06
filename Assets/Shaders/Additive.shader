@@ -5,7 +5,7 @@
 // premultiplies alpha so transparent texels add nothing.
 //
 // No LightMode tag -> renders as SRPDefaultUnlit under URP and unlit under Built-in.
-Shader "EchoMaze/Additive"
+Shader "Sonarfall/Additive"
 {
     Properties
     {

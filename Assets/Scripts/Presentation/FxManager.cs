@@ -16,7 +16,7 @@ public class FxManager : MonoBehaviour
     {
         _cam = cam;
 
-        var mat = new Material(Shader.Find("EchoMaze/Additive")) { name = "ParticleMat" };
+        var mat = new Material(Shader.Find("Sonarfall/Additive")) { name = "ParticleMat" };
         mat.mainTexture = VisualUtils.RadialGlow(64).texture;
 
         _dust  = CreateDust(mat);

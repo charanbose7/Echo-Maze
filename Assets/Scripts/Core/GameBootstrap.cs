@@ -41,7 +41,7 @@ public class GameBootstrap : MonoBehaviour
 #endif
         }
 
-        _glowMat = new Material(Shader.Find("EchoMaze/Additive")) { name = "GlowMat" };
+        _glowMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "GlowMat" };
         _glowSprite = VisualUtils.RadialGlow();
 
         // ---- Camera ----
@@ -65,7 +65,7 @@ public class GameBootstrap : MonoBehaviour
         vigSR.sortingOrder = 90;
 
         // ---- Managers ----
-        var root = new GameObject("EchoMaze");
+        var root = new GameObject("Sonarfall");
         var gm = root.AddComponent<GameManager>();
         var sonar = root.AddComponent<SonarManager>();
         var ui = root.AddComponent<UIManager>();

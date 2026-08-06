@@ -1,6 +1,6 @@
 <div align="center">
 
-# Echo Maze
+# Sonarfall
 
 ### You can't see the maze. You can only listen for it.
 
@@ -162,7 +162,7 @@ A surprising share of the code exists purely so the game feels good in the hand:
 git clone <this-repo>
 ```
 
-Open the project, load `Assets/Scenes/EchoMaze.unity`, press Play.
+Open the project, load `Assets/Scenes/Sonarfall.unity`, press Play.
 
 **Android**
 - Min SDK 26, target 36, IL2CPP, ARM64, App Bundle with symbols embedded
@@ -172,7 +172,7 @@ Open the project, load `Assets/Scenes/EchoMaze.unity`, press Play.
 - **Long-press the vibration row in Settings** to run a haptics self-test and print the platform report (SDK, activity source, vibrator source, amplitude control, attribute tier, OS setting). Haptics cannot be verified from one handset; this is how a tester reports what actually happened.
 
 **iOS**
-- The native haptics bridge lives at `Assets/Plugins/iOS/EchoMazeHaptics.mm` and is merged into the generated Xcode project automatically
+- The native haptics bridge lives at `Assets/Plugins/iOS/SonarfallHaptics.mm` and is merged into the generated Xcode project automatically
 - Requires iPhone 7 or newer for haptics (`UIFeedbackGenerator` no-ops on older hardware rather than failing)
 
 > The upload keystore lives outside the repo and is gitignored. Bump `versionCode` on every upload — Play rejects a duplicate.
@@ -197,7 +197,7 @@ Open [`GameConfig.cs`](Assets/Scripts/Core/GameConfig.cs) — three knobs move t
 
 ```
 Assets/
-├── Scenes/EchoMaze.unity          # one GameObject: GameBootstrap
+├── Scenes/Sonarfall.unity          # one GameObject: GameBootstrap
 ├── Scripts/                       # 20 files, ~6.5k lines
 │   ├── Core/                      # bootstrap, config, game loop, persistence
 │   │   ├── GameBootstrap.cs       #   builds the entire scene at runtime

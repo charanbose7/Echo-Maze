@@ -1,4 +1,4 @@
-// Native iOS haptics bridge for Echo Maze.
+// Native iOS haptics bridge for Sonarfall.
 //
 // Unity merges every .m/.mm/.c/.cpp under Assets/Plugins/iOS into the generated Xcode project
 // automatically, so this file needs no Xcode setup. Because it is Objective-C++ (.mm), the exported

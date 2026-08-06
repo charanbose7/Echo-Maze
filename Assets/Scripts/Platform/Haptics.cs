@@ -134,7 +134,7 @@ public static class Haptics
 
     private static void Report()
     {
-        Debug.Log("[EchoMaze] Haptics: " + Status);
+        Debug.Log("[Sonarfall] Haptics: " + Status);
     }
 
     /// <summary>

@@ -27,7 +27,7 @@ public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
         string manifestPath = Path.Combine(path, "src", "main", "AndroidManifest.xml");
         if (!File.Exists(manifestPath))
         {
-            Debug.LogError("[EchoMaze] AndroidManifest.xml not found at " + manifestPath +
+            Debug.LogError("[Sonarfall] AndroidManifest.xml not found at " + manifestPath +
                            " — VIBRATE permission NOT added, haptics will be dead in this build.");
             return;
         }
@@ -36,7 +36,7 @@ public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
         doc.Load(manifestPath);
 
         var manifest = doc.SelectSingleNode("/manifest") as XmlElement;
-        if (manifest == null) { Debug.LogError("[EchoMaze] Malformed AndroidManifest.xml."); return; }
+        if (manifest == null) { Debug.LogError("[Sonarfall] Malformed AndroidManifest.xml."); return; }
 
         const string ns = "http://schemas.android.com/apk/res/android";
 
@@ -45,7 +45,7 @@ public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
             var el = node as XmlElement;
             if (el != null && el.GetAttribute("name", ns) == Permission)
             {
-                Debug.Log("[EchoMaze] VIBRATE permission already present.");
+                Debug.Log("[Sonarfall] VIBRATE permission already present.");
                 return;
             }
         }
@@ -55,7 +55,7 @@ public class AndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
         manifest.AppendChild(added);
         doc.Save(manifestPath);
 
-        Debug.Log("[EchoMaze] Added " + Permission + " to " + manifestPath);
+        Debug.Log("[Sonarfall] Added " + Permission + " to " + manifestPath);
     }
 }
 #endif

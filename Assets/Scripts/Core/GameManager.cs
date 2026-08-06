@@ -94,7 +94,7 @@ public class GameManager : MonoBehaviour
         _tutorial = gameObject.AddComponent<TutorialController>();
 
         // Decoy pool.
-        var decoyMat = new Material(Shader.Find("EchoMaze/Additive")) { name = "DecoyMat" };
+        var decoyMat = new Material(Shader.Find("Sonarfall/Additive")) { name = "DecoyMat" };
         var ballSprite = VisualUtils.RadialGlow(); // the pulsing hazard
         var ringSprite = VisualUtils.HollowRing(); // the reveal highlight (clean circle outline)
         var container = new GameObject("Decoys").transform;

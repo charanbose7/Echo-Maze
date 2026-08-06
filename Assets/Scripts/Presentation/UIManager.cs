@@ -24,7 +24,7 @@ public class UIManager : MonoBehaviour
         var ttf = Resources.Load<Font>(resourcePath);
         if (ttf == null)
         {
-            Debug.LogWarning("[EchoMaze] Font not found: Resources/" + resourcePath + " — falling back.");
+            Debug.LogWarning("[Sonarfall] Font not found: Resources/" + resourcePath + " — falling back.");
             return TMP_Settings.defaultFontAsset;
         }
         return TMP_FontAsset.CreateFontAsset(ttf);
@@ -971,7 +971,7 @@ public class UIManager : MonoBehaviour
         tgrt.anchorMin = tgrt.anchorMax = new Vector2(0.5f, 0.5f); tgrt.pivot = new Vector2(0.5f, 0.5f);
         tgrt.anchoredPosition = new Vector2(0, 430); tgrt.sizeDelta = new Vector2(1000, 420);
 
-        var title = Display(Text_("Title", root, new Vector2(0.5f, 0.5f), new Vector2(0, 430), new Vector2(1020, 160), 84, TextAnchor.MiddleCenter, Spaced("ECHO MAZE")));
+        var title = Display(Text_("Title", root, new Vector2(0.5f, 0.5f), new Vector2(0, 430), new Vector2(1020, 160), 84, TextAnchor.MiddleCenter, Spaced("SONARFALL")));
         title.color = new Color(0.85f, 0.97f, 1f, 1f);
         Neon(title, Accent, 0.85f);
 
@@ -1169,7 +1169,7 @@ public class UIManager : MonoBehaviour
         {
             Haptics.SelfTest(this);
             ShowBanner("VIBRATION TEST\n<size=55%>" + Haptics.Status + "</size>", Accent, 4f);
-            Debug.Log("[EchoMaze] Haptics self-test: " + Haptics.Status);
+            Debug.Log("[Sonarfall] Haptics self-test: " + Haptics.Status);
         };
 
         // RESET PROGRESS used to live here, behind a confirm step. It is gone entirely.
