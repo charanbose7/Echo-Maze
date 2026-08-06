@@ -3,7 +3,7 @@ using UnityEngine;
 
 /// <summary>
 /// Owns the shared sonar wall material and builds the maze walls. For performance the
-/// walls render as ONE combined mesh (a single draw call) using EchoMaze/SonarWall,
+/// walls render as ONE combined mesh (a single draw call) using Sonarfall/SonarWall,
 /// while collision uses many lightweight BoxCollider2D on a single static object.
 /// Because the mesh is authored in world space at identity transform, the shader's
 /// world-space math "just works".
@@ -23,9 +23,9 @@ public class WallShaderController : MonoBehaviour
 
     public void Init()
     {
-        var shader = Shader.Find("EchoMaze/SonarWall");
+        var shader = Shader.Find("Sonarfall/SonarWall");
         if (shader == null)
-            Debug.LogError("[EchoMaze] Shader 'EchoMaze/SonarWall' not found.");
+            Debug.LogError("[Sonarfall] Shader 'Sonarfall/SonarWall' not found.");
 
         WallMaterial = new Material(shader) { name = "SonarWallMat" };
         WallMaterial.SetColor("_Color", GameConfig.WallGlowColor);

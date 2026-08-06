@@ -19,7 +19,7 @@
 //   _SonarFlash    = strength multiplier of the white front flash
 //
 // No LightMode tag -> URP renders this as "SRPDefaultUnlit"; Built-in renders it unlit.
-Shader "EchoMaze/SonarWall"
+Shader "Sonarfall/SonarWall"
 {
     Properties
     {

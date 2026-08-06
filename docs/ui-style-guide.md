@@ -48,7 +48,13 @@ Two palettes, deliberately separate. Mixing them is what makes the UI look off.
 
 > The one deliberate exception is `GameConfig.BackgroundColor` (B/G 1.75) — the camera clear colour. It never appears as a flat field: stars, the vignette and the maze always break it up, and changing it would shift the look of the entire game.
 
-**3. Never pipe a gameplay colour into UI chrome.** `SetCelebrationTitle` was handed the *sector* tint and applied it to the glow panel behind the title — and sector tints include teal and sea-green, so the celebration went green every few levels. A gameplay colour may tint **text**, never a panel or glow.
+**3. Never pipe a gameplay colour into UI chrome — except as a labelled sample.** `SetCelebrationTitle` was handed the *sector* tint and applied it to the glow panel behind the title — and sector tints include teal and sea-green, so the celebration went green every few levels. A gameplay colour may tint **text**, never a panel or glow.
+
+> The one sanctioned use is the teach card's **swatch** — the dot above the title on the "DECOYS" /
+> "BONUS ECHO" explainers. That is not chrome tinted by a gameplay colour, it is the gameplay
+> object itself held still so the player can match the words to the thing. The card's frame and
+> title still take a UI hue (`Danger` for decoys, `Gold` for the orb, `Accent` for the exit),
+> never the gameplay one.
 
 **4. Panels carry the bracket frame.** Callouts use the same corner-bracket sprite as the buttons, tinted to the callout's own hue (red on a fail, gold on the Daily). That is what makes a panel look like part of this game instead of a box dropped on top of it.
 

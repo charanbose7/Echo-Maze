@@ -56,8 +56,32 @@ public static class Haptics
 
     public static bool Enabled = true;
 
-    /// <summary>What the platform layer negotiated at startup. Logged at boot; useful over adb/Xcode.</summary>
-    public static string Status { get; private set; } = "editor / unsupported platform";
+    /// <summary>What the platform layer negotiated at startup — fixed once the vibrator is found.</summary>
+    private static string _platformNote = "editor / unsupported platform";
+
+    /// <summary>
+    /// The full diagnostic, assembled live on every read.
+    ///
+    /// This used to be a plain string baked at startup, which made it lie about the two values
+    /// that can change AFTER init: the in-game vibration toggle (set later by
+    /// SaveData.ApplySettings) and the OS touch-feedback setting (the user can change it while
+    /// the app runs). A tester with vibration switched off would feel nothing and read
+    /// "in-game toggle on" — sending you hunting for a device fault that did not exist.
+    /// </summary>
+    public static string Status
+    {
+        get
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            return _platformNote
+                 + " | " + TierName(_attrTier)
+                 + " | system touch-feedback " + TouchFeedbackSetting()
+                 + " | in-game toggle " + (Enabled ? "on" : "OFF");
+#else
+            return _platformNote + " | in-game toggle " + (Enabled ? "on" : "OFF");
+#endif
+        }
+    }
 
     // Louder events may cut off quieter ones, never the reverse.
     private const int PrioAmbient = 1;   // UI tick, ping, wall brush
@@ -110,7 +134,7 @@ public static class Haptics
 
     private static void Report()
     {
-        Debug.Log("[EchoMaze] Haptics: " + Status);
+        Debug.Log("[Sonarfall] Haptics: " + Status);
     }
 
     /// <summary>
@@ -140,8 +164,11 @@ public static class Haptics
     // Two ladders, because a large share of Android devices cannot vary vibration strength.
     //
     // WITH amplitude control: short pulses, strength carries the difference.
-    private const long MsSelect = 14, MsLight = 20, MsMedium = 32, MsHeavy = 55;
-    private const int AmpSelect = 70, AmpLight = 110, AmpMedium = 190, AmpHeavy = 255;
+    // Amplitudes raised roughly 1.35x against the old ladder. USAGE_MEDIA is scaled less
+    // generously than USAGE_TOUCH by the OS on many devices (dumpsys vibrator_manager prints the
+    // per-class table), and moving gameplay onto MEDIA would otherwise land softer than before.
+    private const long MsSelect = 14, MsLight = 22, MsMedium = 34, MsHeavy = 58;
+    private const int AmpSelect = 95, AmpLight = 150, AmpMedium = 225, AmpHeavy = 255;
     //
     // WITHOUT it: every pulse plays at full power and the amplitude argument is discarded, so
     // duration is the ONLY thing separating the tiers — spread much wider, and long enough that a
@@ -158,22 +185,39 @@ public static class Haptics
     private const float RestMs = 45f;
 
     private static AndroidJavaObject _vibrator;     // held for the app's lifetime, never disposed
-    private static AndroidJavaObject _attributes;   // classifies these as touch feedback
+    private static AndroidJavaObject _attributes;   // gameplay events  -> USAGE_MEDIA
+    private static AndroidJavaObject _attrTouch;    // UI button taps   -> USAGE_TOUCH
     private static AndroidJavaObject _select, _light, _medium, _heavy, _success, _wrong;
 
     private static bool _ready;
     private static bool _amplitudeControl;
+    private static string _vibratorSource = "none";
+    private static string _activitySource = "none";
     private static bool _handheldFallback;   // Vibrator unreachable; use Handheld.Vibrate for big beats
 
     private static bool PlatformReady { get { return _ready || _handheldFallback; } }
 
     // How the vibration is classified, best first.
     //
-    // TOUCH, not MEDIA. The per-class intensity is what the OS multiplies our amplitude by, and it
-    // differs per device — `adb shell dumpsys vibrator_manager` prints the table. On the hardware
-    // this was developed against, TOUCH scaled 1.4x while MEDIA scaled 1.0x, so filing a game's
-    // buzzes as media quietly cost strength. Check that dump before changing this.
-    private const int TierVibrationAttributes = 2;   // android.os.VibrationAttributes, USAGE_TOUCH
+    // MEDIA for gameplay, TOUCH only for UI taps — and this split is the whole reason haptics
+    // worked on some testers' phones and not others.
+    //
+    // USAGE_TOUCH is governed by the system "Touch feedback" / "Touch vibration" toggle. That
+    // switch is about UI taps, plenty of people turn it off, and some OEM skins ship it off. When
+    // it is off, Android silently drops EVERY USAGE_TOUCH vibration: no exception, nothing in
+    // logcat, and the app cannot tell. Filing a game's rumble under it therefore made the entire
+    // feature depend on an unrelated preference.
+    //
+    // Android's own wording for USAGE_MEDIA settles it: "media vibrations, such as music, movie,
+    // soundtrack, animations, GAMES, or any interactive media that isn't for touch feedback
+    // specifically". Gameplay feedback is media; a button press genuinely is touch feedback, so
+    // Kind.Selection keeps USAGE_TOUCH and correctly obeys the user's choice there.
+    //
+    // This was originally TOUCH because `adb shell dumpsys vibrator_manager` showed TOUCH scaling
+    // 1.4x against MEDIA's 1.0x on the development handset. That is real, but it traded "slightly
+    // stronger where it works" for "completely silent where it doesn't" — a bad trade. The
+    // amplitude ladder below is raised to compensate.
+    private const int TierVibrationAttributes = 2;   // android.os.VibrationAttributes
     private const int TierAudioAttributes     = 1;   // android.media.AudioAttributes, SONIFICATION
     private const int TierNone                = 0;   // bare vibrate(effect)
 
@@ -215,27 +259,44 @@ public static class Haptics
             using (var version = new AndroidJavaClass("android.os.Build$VERSION"))
                 sdk = version.GetStatic<int>("SDK_INT");
 
-            using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-            using (var activity = player.GetStatic<AndroidJavaObject>("currentActivity"))
-            {
-                // Android 12 deprecated getSystemService("vibrator") in favour of the manager. The
-                // old call still works on most builds, but a few hand back a vibrator that ignores
-                // amplitude, so prefer the supported route where it exists.
-                if (sdk >= 31)
-                {
-                    using (var mgr = activity.Call<AndroidJavaObject>("getSystemService", "vibrator_manager"))
-                        if (mgr != null) _vibrator = mgr.Call<AndroidJavaObject>("getDefaultVibrator");
-                }
-                if (_vibrator == null)
-                    _vibrator = activity.Call<AndroidJavaObject>("getSystemService", "vibrator");
-            }
+            var activity = GetActivity();   // NOT disposed — Unity may own it
+            if (activity == null) { _platformNote = "no Android activity (" + _activitySource + ")"; Report(); return; }
 
-            if (_vibrator == null) { Status = "no vibrator service"; Report(); return; }
-            if (!_vibrator.Call<bool>("hasVibrator")) { Status = "device reports no vibrator"; Report(); return; }
+            // Android 12 deprecated getSystemService("vibrator") in favour of the manager. The
+            // old call still works on most builds, but a few hand back a vibrator that ignores
+            // amplitude, so prefer the supported route where it exists.
+            //
+            // Both routes are tried, and — importantly — a vibrator is only accepted if it also
+            // reports hasVibrator(). The previous version took the manager's default vibrator on
+            // faith and gave up entirely if IT said no, never trying the legacy service. On any
+            // device where the manager exposes an odd default (multi-actuator handsets, some
+            // foldables) that turned a working motor into "device reports no vibrator".
+            if (sdk >= 31)
+            {
+                using (var mgr = activity.Call<AndroidJavaObject>("getSystemService", "vibrator_manager"))
+                    if (mgr != null)
+                        _vibrator = AcceptVibrator(mgr.Call<AndroidJavaObject>("getDefaultVibrator"),
+                                                   "VibratorManager");
+            }
+            if (_vibrator == null)
+                _vibrator = AcceptVibrator(activity.Call<AndroidJavaObject>("getSystemService", "vibrator"),
+                                           "legacy service");
+
+            if (_vibrator == null)
+            {
+                _platformNote = "no usable vibrator (activity via " + _activitySource + ", sdk " + sdk + ")";
+                Report(); return;
+            }
 
             _amplitudeControl = _vibrator.Call<bool>("hasAmplitudeControl");
 
-            BuildAttributes(TierVibrationAttributes);
+            // Pick the tier by SDK rather than by catching a failure.
+            //
+            // vibrate(VibrationEffect, VibrationAttributes) only exists from API 33. Below that it
+            // throws, and the old code discovered this by losing the first haptic of every session
+            // to an exception before stepping down. Since minSdk is 26, most installs took that
+            // path — so ask the OS version instead.
+            BuildAttributes(sdk >= 33 ? TierVibrationAttributes : TierAudioAttributes);
 
             using (var fx = new AndroidJavaClass("android.os.VibrationEffect"))
             {
@@ -268,8 +329,16 @@ public static class Haptics
             }
 
             _ready = true;
-            Status = "android ok (sdk " + sdk + ", amplitude control "
-                   + (_amplitudeControl ? "yes" : "no") + ", " + TierName(_attrTier) + ")";
+            // Everything a remote tester's report needs to be actionable. Each field has caused a
+            // real "haptics don't work" at some point, and they are indistinguishable without it.
+            // Only the values fixed at startup. The tier, the OS touch-feedback setting and the
+            // in-game toggle are appended live by the Status property, because all three can
+            // change after this point.
+            _platformNote = "android ok"
+                   + " | sdk " + sdk
+                   + " | activity via " + _activitySource
+                   + " | vibrator via " + _vibratorSource
+                   + " | amplitude control " + (_amplitudeControl ? "yes" : "NO");
         }
         catch (System.Exception e)
         {
@@ -277,7 +346,7 @@ public static class Haptics
             // Fall back rather than going silent.
             _ready = false;
             _handheldFallback = true;
-            Status = "android init failed (" + e.Message + ") — Handheld.Vibrate fallback";
+            _platformNote = "android init failed (" + e.Message + ") — Handheld.Vibrate fallback";
         }
         Report();
     }
@@ -290,48 +359,151 @@ public static class Haptics
     private static bool BuildAttributes(int tier)
     {
         _attributes = null;
+        _attrTouch = null;
         _attrTier = TierNone;
 
         if (tier >= TierVibrationAttributes)
         {
             try
             {
+                // Read both constants off the class rather than hardcoding 0x13 / 0x12 — a wrong
+                // literal here mis-files every buzz in the game and is invisible at runtime.
                 using (var vaClass = new AndroidJavaClass("android.os.VibrationAttributes"))
                 {
-                    int usageTouch = vaClass.GetStatic<int>("USAGE_TOUCH");
-                    using (var b = new AndroidJavaObject("android.os.VibrationAttributes$Builder"))
-                    using (var b1 = b.Call<AndroidJavaObject>("setUsage", usageTouch))
-                        _attributes = b1.Call<AndroidJavaObject>("build");
+                    _attributes = MakeAttributes(vaClass.GetStatic<int>("USAGE_MEDIA"));
+                    _attrTouch  = MakeAttributes(vaClass.GetStatic<int>("USAGE_TOUCH"));
                 }
-                _attrTier = TierVibrationAttributes;
-                return true;
+                if (_attributes == null) { _attrTouch = null; }
+                else { _attrTier = TierVibrationAttributes; return true; }
             }
-            catch { _attributes = null; }
+            catch { _attributes = null; _attrTouch = null; }
         }
 
         if (tier >= TierAudioAttributes)
         {
             try
             {
-                // USAGE_ASSISTANCE_SONIFICATION = 13, CONTENT_TYPE_SONIFICATION = 4. AOSP maps
-                // SONIFICATION to VibrationAttributes.USAGE_TOUCH, matching the tier above.
-                using (var builder = new AndroidJavaObject("android.media.AudioAttributes$Builder"))
-                using (var b1 = builder.Call<AndroidJavaObject>("setUsage", 13))
-                using (var b2 = b1.Call<AndroidJavaObject>("setContentType", 4))
-                    _attributes = b2.Call<AndroidJavaObject>("build");
-                _attrTier = TierAudioAttributes;
-                return true;
+                // The API 26..32 route: vibrate(VibrationEffect, AudioAttributes).
+                //
+                // AOSP's VibrationAttributes.Builder.setUsage(AudioAttributes) translates the audio
+                // usage into a vibration usage, and the mapping is what matters here:
+                //     USAGE_GAME                   -> USAGE_MEDIA
+                //     USAGE_MEDIA                  -> USAGE_MEDIA
+                //     USAGE_ASSISTANCE_SONIFICATION-> USAGE_TOUCH
+                // This tier previously used SONIFICATION for everything, which is why the earlier
+                // MEDIA fix changed nothing below Android 13 — the translation put it straight back
+                // under the touch-feedback setting. GAME lands on MEDIA, which is what we want.
+                using (var aaClass = new AndroidJavaClass("android.media.AudioAttributes"))
+                {
+                    int usageGame  = aaClass.GetStatic<int>("USAGE_GAME");
+                    int usageSonif = aaClass.GetStatic<int>("USAGE_ASSISTANCE_SONIFICATION");
+                    int sonifType  = aaClass.GetStatic<int>("CONTENT_TYPE_SONIFICATION");
+                    _attributes = MakeAudioAttributes(usageGame,  sonifType);
+                    _attrTouch  = MakeAudioAttributes(usageSonif, sonifType);
+                }
+                if (_attributes != null) { _attrTier = TierAudioAttributes; return true; }
             }
-            catch { _attributes = null; }
+            catch { _attributes = null; _attrTouch = null; }
         }
 
         return false;
     }
 
+    /// <summary>
+    /// Reads Settings.System.HAPTIC_FEEDBACK_ENABLED purely for the log line. It is NOT used to
+    /// gate anything — gameplay haptics are filed as media precisely so this setting doesn't
+    /// silence them. It is here because "haptics don't work on my phone" is otherwise
+    /// undiagnosable remotely, and this one value distinguishes "the app is broken" from "the
+    /// tester has touch vibration switched off", which were indistinguishable before.
+    /// </summary>
+    private static string TouchFeedbackSetting()
+    {
+        try
+        {
+            var activity = GetActivity();
+            if (activity == null) return "unknown";
+            using (var resolver = activity.Call<AndroidJavaObject>("getContentResolver"))
+            using (var system = new AndroidJavaClass("android.provider.Settings$System"))
+            {
+                int v = system.CallStatic<int>("getInt", resolver, "haptic_feedback_enabled", 1);
+                return v == 0 ? "OFF" : "on";
+            }
+        }
+        catch { return "unknown"; }
+    }
+
+    /// <summary>
+    /// The current Android Activity. <b>Never Dispose the result.</b>
+    ///
+    /// This project ships the GameActivity entry point (ProjectSettings androidApplicationEntry: 2,
+    /// the Unity 6 default for new projects), where the running activity is
+    /// UnityPlayerGameActivity rather than the classic UnityPlayerActivity. The old
+    /// `com.unity3d.player.UnityPlayer.currentActivity` static is kept for plugin compatibility but
+    /// is not the supported route there and is reported to come back null on some builds — which
+    /// would drop the vibrator lookup into the crude Handheld.Vibrate fallback with nothing in the
+    /// log to explain it.
+    ///
+    /// UnityEngine.Android.AndroidApplication.currentActivity is Unity's documented accessor and
+    /// is explicitly specified to work with BOTH entry points, so it is tried first. Unity owns
+    /// that object, hence the no-Dispose rule; the legacy fallback returns a wrapper we
+    /// deliberately keep for the app's lifetime, exactly like _vibrator.
+    /// </summary>
+    private static AndroidJavaObject GetActivity()
+    {
+        try
+        {
+            var a = UnityEngine.Android.AndroidApplication.currentActivity;
+            if (a != null) { _activitySource = "AndroidApplication"; return a; }
+        }
+        catch { /* older Unity, or no such API — fall through */ }
+
+        try
+        {
+            using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+            {
+                var a = player.GetStatic<AndroidJavaObject>("currentActivity");
+                if (a != null) { _activitySource = "UnityPlayer.currentActivity"; return a; }
+            }
+        }
+        catch { }
+
+        _activitySource = "NONE";
+        return null;
+    }
+
+    /// <summary>Return the vibrator only if it exists AND reports a motor; otherwise null so the
+    /// caller can try the other route.</summary>
+    private static AndroidJavaObject AcceptVibrator(AndroidJavaObject v, string source)
+    {
+        if (v == null) return null;
+        try
+        {
+            if (!v.Call<bool>("hasVibrator")) return null;
+        }
+        catch { return null; }
+        _vibratorSource = source;
+        return v;
+    }
+
+    private static AndroidJavaObject MakeAttributes(int usage)
+    {
+        using (var b = new AndroidJavaObject("android.os.VibrationAttributes$Builder"))
+        using (var b1 = b.Call<AndroidJavaObject>("setUsage", usage))
+            return b1.Call<AndroidJavaObject>("build");
+    }
+
+    private static AndroidJavaObject MakeAudioAttributes(int usage, int contentType)
+    {
+        using (var b = new AndroidJavaObject("android.media.AudioAttributes$Builder"))
+        using (var b1 = b.Call<AndroidJavaObject>("setUsage", usage))
+        using (var b2 = b1.Call<AndroidJavaObject>("setContentType", contentType))
+            return b2.Call<AndroidJavaObject>("build");
+    }
+
     private static string TierName(int tier)
     {
-        if (tier == TierVibrationAttributes) return "VibrationAttributes(USAGE_TOUCH)";
-        if (tier == TierAudioAttributes) return "AudioAttributes(SONIFICATION)";
+        if (tier == TierVibrationAttributes) return "VibrationAttributes(MEDIA/TOUCH)";
+        if (tier == TierAudioAttributes) return "AudioAttributes(GAME/SONIFICATION)";
         return "no attributes";
     }
 
@@ -342,9 +514,13 @@ public static class Haptics
         var effect = EffectFor(kind);
         if (effect == null) return;
 
+        // A button press IS touch feedback and should honour the user's touch-vibration setting.
+        // Everything else is gameplay and must not.
+        var attrs = (kind == Kind.Selection && _attrTouch != null) ? _attrTouch : _attributes;
+
         try
         {
-            if (_attrTier != TierNone) _vibrator.Call("vibrate", effect, _attributes);
+            if (_attrTier != TierNone) _vibrator.Call("vibrate", effect, attrs);
             else                       _vibrator.Call("vibrate", effect);
         }
         catch (System.Exception e)
@@ -354,22 +530,23 @@ public static class Haptics
             // classification, which would hand us back to whatever default scaling the OEM applies.
             if (_attrTier != TierNone && BuildAttributes(_attrTier - 1))
             {
-                Status = "fell back to " + TierName(_attrTier);
+                // No note to write: Status reports TierName(_attrTier) live, so the change is
+                // already visible. Overwriting the note here used to erase the sdk / activity /
+                // vibrator fields — exactly the information needed to diagnose the fallback.
                 Report();
-                try { _vibrator.Call("vibrate", effect, _attributes); }
+                try { _vibrator.Call("vibrate", effect, _attributes); }   // media tier on retry
                 catch { BuildAttributes(TierNone); try { _vibrator.Call("vibrate", effect); } catch { _ready = false; } }
             }
             else if (_attrTier != TierNone)
             {
                 BuildAttributes(TierNone);
-                Status = "no attributes supported, using plain vibrate";
-                Report();
+                Report();   // tier is live in Status; see the note above
                 try { _vibrator.Call("vibrate", effect); } catch { _ready = false; }
             }
             else
             {
                 _ready = false;
-                Status = "vibrate failed: " + e.Message;
+                _platformNote = "vibrate failed: " + e.Message;
                 Report();
             }
         }
@@ -430,14 +607,14 @@ public static class Haptics
         try
         {
             _ready = _EchoHapticsInit();
-            Status = _ready
+            _platformNote = _ready
                 ? "ios ok (UIFeedbackGenerator)"
                 : "ios unavailable (requires iOS 10+)";
         }
         catch (System.Exception e)
         {
             _ready = false;
-            Status = "ios init failed: " + e.Message;
+            _platformNote = "ios init failed: " + e.Message;
         }
         Report();
     }
